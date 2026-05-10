@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(/Applications/Codex.app/Contents/Resources/codex --version)"
+      "Bash(/Applications/Codex.app/Contents/Resources/codex --version)",
+      "Bash(awk *)"
     ]
   }
 }

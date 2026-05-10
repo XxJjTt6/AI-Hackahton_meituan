@@ -1,0 +1,86 @@
+{
+  "A": {
+    "desc": "K=1 willingness-max",
+    "k_distribution": {
+      "1": 30
+    },
+    "n_groups": 30,
+    "n_unassigned": 0,
+    "predictions": {
+      "avg-subset": 2519.2358013999997,
+      "max-w-accepter": 2519.2358013999997,
+      "min-score-accepter": 2519.2358013999997,
+      "weighted": 2519.2358013999997
+    }
+  },
+  "B": {
+    "desc": "K=1 score-min (no w filter)",
+    "k_distribution": {
+      "1": 30
+    },
+    "n_groups": 30,
+    "n_unassigned": 0,
+    "predictions": {
+      "avg-subset": 2631.6172305,
+      "max-w-accepter": 2631.6172305,
+      "min-score-accepter": 2631.6172305,
+      "weighted": 2631.6172305
+    }
+  },
+  "C": {
+    "desc": "K=2 top-2 willingness",
+    "k_distribution": {
+      "2": 30
+    },
+    "n_groups": 30,
+    "n_unassigned": 0,
+    "predictions": {
+      "avg-subset": 2165.37638434127,
+      "max-w-accepter": 2165.81818675994,
+      "min-score-accepter": 2153.62481862772,
+      "weighted": 2165.4469831106153
+    }
+  },
+  "D": {
+    "desc": "K=2 wmax + score-min",
+    "k_distribution": {
+      "2": 30
+    },
+    "n_groups": 30,
+    "n_unassigned": 0,
+    "predictions": {
+      "avg-subset": 2265.09279104747,
+      "max-w-accepter": 2274.32598637056,
+      "min-score-accepter": 2255.6697359867803,
+      "weighted": 2263.217558022627
+    }
+  },
+  "E": {
+    "desc": "K=3 top-3 willingness",
+    "k_distribution": {
+      "3": 20
+    },
+    "n_groups": 20,
+    "n_unassigned": 10,
+    "predictions": {
+      "avg-subset": 2277.5099503393058,
+      "max-w-accepter": 2278.5484973377643,
+      "min-score-accepter": 2260.479251124757,
+      "weighted": 2277.4672436984356
+    }
+  },
+  "F": {
+    "desc": "reject 5 + K=2",
+    "k_distribution": {
+      "2": 25
+    },
+    "n_groups": 25,
+    "n_unassigned": 5,
+    "predictions": {
+      "avg-subset": 2289.4690059114146,
+      "max-w-accepter": 2288.4557272834204,
+      "min-score-accepter": 2279.5451231714706,
+      "weighted": 2289.498219836717
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "_comment": "填入每个 probe 提交后平台返回的平均分（保留两位小数）。未提交的留 null。提交完后执行: python3 probes/analyze.py",
+  "baseline": {
+    "platform_avg_score": 712.28,
+    "implied_low_score": 1799.90,
+    "submitted": true
+  },
+  "A": {"platform_avg_score": 770.47, "low_score_direct": 2360.42, "completion": "30/30", "submitted": true},
+  "B": {"platform_avg_score": 788.61, "low_score_direct": 2541.79, "completion": "30/30", "submitted": true},
+  "C": {"platform_avg_score": 731.61, "low_score_direct": 1971.82, "completion": "30/30", "submitted": true},
+  "D": {"platform_avg_score": 740.20, "low_score_direct": 2057.67, "completion": "30/30", "submitted": true},
+  "E": {"platform_avg_score": 745.83, "low_score_direct": 2113.97, "completion": "20/30", "submitted": true},
+  "F": {"platform_avg_score": 748.42, "low_score_direct": 2139.84, "completion": "25/30", "submitted": true},
+  "non_low_total": 5322.90,
+  "_formula": "implied_low_score = platform_avg_score * 10 - non_low_total"
+}

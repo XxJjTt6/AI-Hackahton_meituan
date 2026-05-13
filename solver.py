@@ -1,2716 +1,1570 @@
-import math
-import random
-import time
-
-
-# ===== PROBE EXPERIMENT SWITCH =====
-# Set PROBE_MODE to one of {"A","B","C","D","E","F"} to enable a probe strategy
-# on low-willingness cases ONLY. Normal cases stay on the original solver path,
-# so non-low scores are unaffected. Default (None) = no probe, identical to baseline.
-PROBE_MODE = None
-# Set PROBE_SCARCE_MODE to one of {"G","H","I","J","K"} for scarce-case probes.
-PROBE_SCARCE_MODE = "G"
-# ====================================
-
-# ===== LOW-WILLINGNESS SCORING MODEL SWITCH =====d5
-# PROBE experiments (6 probes, RMSE comparison) showed that min-score-accepter
-# fits the platform's true scoring significantly better than avg-subset on
-# low-willingness cases (RMSE 42.88 vs 46.84). The old correction offsets
-# ({2: -6.5, 3: -8.0}) were a band-aid for avg-subset's systematic bias.
-#
-# When _LOW_USE_MSA is True, _group_expected_cost uses min-score-accepter
-# instead of avg-subset, giving the optimizer a gradient that aligns with
-# the platform's actual objective. Normal cases keep using avg-subset.
-_LOW_USE_MSA = False
-# =================================================
-
-
-def solve(input_text: str) -> list:
-    deadline = time.monotonic() + 8.7
-    lines = input_text.strip().splitlines()
-    start = 1 if lines and lines[0].startswith("task_id_list") else 0
-
-    candidates = []
-    all_tasks = set()
-    for row_index, line in enumerate(lines[start:]):
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split("\t")
-        if len(parts) < 4:
-            continue
-        task_key, courier_id, score_text, willingness_text = parts[:4]
-        task_key = task_key.strip()
-        courier_id = courier_id.strip()
-        task_ids = tuple(t.strip() for t in task_key.split(",") if t.strip())
-        if not task_ids or not courier_id:
-            continue
-        try:
-            score = float(score_text)
-            willingness = float(willingness_text)
-        except ValueError:
-            continue
-        candidates.append((task_key, task_ids, courier_id, score, willingness, row_index))
-        for task_id in task_ids:
-            all_tasks.add(task_id)
-
-    if not candidates:
-        return []
-
-    # PROBE hook: only intercept low-willingness cases, leave others untouched.
-    if PROBE_MODE is not None:
-        _probe_singles_w = [c[4] for c in candidates if len(c[1]) == 1]
-        _probe_avg_sw = sum(_probe_singles_w) / len(_probe_singles_w) if _probe_singles_w else 1.0
-        _probe_cc = len({c[2] for c in candidates})
-        if _probe_avg_sw < 0.25 and len(all_tasks) == 30 and _probe_cc >= 50:
-            return _run_probe(PROBE_MODE, candidates, all_tasks)
-
-    solutions = []
-    singles = [c for c in candidates if len(c[1]) == 1]
-    courier_count = len({c[2] for c in candidates})
-    task_count = len(all_tasks)
-
-    # Scarce PROBE hook: intercept scarce_seed401 (40 tasks, <50 couriers, couriers<tasks)
-    if PROBE_SCARCE_MODE is not None:
-        if courier_count < task_count and task_count == 40 and courier_count < 50:
-            return _run_scarce_probe(PROBE_SCARCE_MODE, candidates, all_tasks)
-
-    avg_willingness = sum(c[4] for c in candidates) / len(candidates)
-    scarce = courier_count <= task_count
-    low_willingness = avg_willingness < 0.27
-    abundant = courier_count >= len(all_tasks) * 3 // 2 and _singles_cover_all_tasks(singles, all_tasks)
-    has_large_bundle_candidate = any(len(c[1]) > 2 for c in candidates)
-
-    global _LOW_USE_MSA
-    _LOW_USE_MSA = bool(low_willingness)
-    try:
-        result = _solve_inner(candidates, all_tasks, singles, scarce, low_willingness,
-                              abundant, has_large_bundle_candidate, deadline, solutions)
-    finally:
-        _LOW_USE_MSA = False
-    return result
-
-
-def _solve_inner(candidates, all_tasks, singles, scarce, low_willingness,
-                 abundant, has_large_bundle_candidate, deadline, solutions):
-    task_count = len(all_tasks)
-
-    if task_count <= 8 and time.monotonic() < deadline - 1.5:
-        tiny_deadline = min(deadline, time.monotonic() + 1.2)
-        tiny_solution = _solve_tiny_exact(candidates, all_tasks, tiny_deadline)
-        if tiny_solution:
-            solutions.append(tiny_solution)
-
-    if singles:
-        single_solution = _solve_single_task_multidispatch(singles, all_tasks)
-        if scarce:
-            scarce_single_deadline = min(deadline, time.monotonic() + 1.2)
-            single_solution = _reassign_single_solution(single_solution, singles, all_tasks, scarce_single_deadline)
-            single_solution = _rebalance_single_solution(single_solution, singles, all_tasks, scarce_single_deadline)
-            single_solution = _reassign_single_solution(single_solution, singles, all_tasks, scarce_single_deadline)
-        else:
-            if not low_willingness:
-                single_deadline = min(deadline, time.monotonic() + 5.5) if abundant else min(deadline, time.monotonic() + 1.0)
-                single_solution = _destroy_repair_single_solution(single_solution, singles, all_tasks, single_deadline)
-            single_solution = _reassign_single_solution(single_solution, singles, all_tasks, deadline)
-            single_solution = _rebalance_single_solution(single_solution, singles, all_tasks, deadline)
-            single_solution = _reassign_single_solution(single_solution, singles, all_tasks, deadline)
-        solutions.append(single_solution)
-
-        if abundant and time.monotonic() < deadline - 1.9:
-            random_solution = _random_single_start_solution(singles, all_tasks, deadline)
-            if random_solution:
-                solutions.append(random_solution)
-
-    if scarce and time.monotonic() < deadline - 1.0:
-        scarce_deadline = min(deadline, time.monotonic() + 1.5)
-        scarce_enum = _solve_scarce_bundle_enum(candidates, all_tasks, scarce_deadline)
-        if scarce_enum:
-            solutions.append(scarce_enum)
-
-    if low_willingness and time.monotonic() < deadline - 0.5:
-        mcf_solution = _solve_low_mcf(candidates, all_tasks, deadline)
-        if mcf_solution:
-            solutions.append(mcf_solution)
-        # Diversified random starts: escape the deterministic greedy basin.
-        # Different seeds + noise levels produce structurally different solutions.
-        for seed in (7, 13, 29, 43):
-            if time.monotonic() < deadline - 0.35:
-                rand_sol = _random_start_low(candidates, all_tasks, singles, deadline, seed)
-                if rand_sol:
-                    solutions.append(rand_sol)
-
-    if not abundant or low_willingness or has_large_bundle_candidate:
-        modes = ("gain", "cover") if low_willingness else ("ratio", "gain", "cover")
-        for mode in modes:
-            if time.monotonic() < deadline - 0.35:
-                solutions.append(_solve_disjoint_then_multidispatch(candidates, all_tasks, mode=mode, deadline=deadline))
-        if time.monotonic() < deadline - 0.55:
-            pair_solution = _solve_pair_potential_matching(
-                candidates,
-                all_tasks,
-                deadline,
-                lookahead=5 if low_willingness else 4,
-                flexible_initial=low_willingness,
-            )
-            if pair_solution:
-                solutions.append(pair_solution)
-        if time.monotonic() < deadline - 0.25:
-            solutions.append(_solve_sparse_cover(candidates, all_tasks, deadline))
-
-    # Randomized greedy with bundles: explores different basins for small/medium.
-    # Runs 3-5 random restarts, each producing a structurally different solution.
-    is_small_or_medium = 6 <= task_count <= 35
-    if is_small_or_medium and time.monotonic() < deadline - 1.2:
-        n_restarts = 5 if task_count <= 15 else 3
-        for i in range(n_restarts):
-            if time.monotonic() < deadline - 0.35:
-                rand_sol = _randomized_greedy_bundles(
-                    candidates, all_tasks, deadline, seed=100 + i * 17, max_time=0.3)
-                if rand_sol:
-                    solutions.append(rand_sol)
-
-    solutions.append(_fallback_official_greedy(candidates))
-
-    # For low-willingness cases, use robust multi-model scoring to pick
-    # the best candidate. The platform's true scoring model is unknown;
-    # picking the solution that performs well under ALL plausible models
-    # (avg-subset, MSA, weighted) hedges against model uncertainty.
-    if low_willingness:
-        best = _pick_robust_best(solutions, candidates, all_tasks)
-    else:
-        best = min((s for s in solutions if s), key=lambda s: _solution_expected_cost(s, candidates, all_tasks))
-    # More passes for low (needs more search) and medium (target medium_seed202 anomaly)
-    is_medium = not scarce and not low_willingness and not abundant and 20 <= task_count <= 35
-    local_passes = 4 if low_willingness else (3 if is_medium else 2)
-    if low_willingness and time.monotonic() < deadline - 1.5:
-        # Reserve ~1.8s for SA + final local improve. Cap local improve earlier.
-        improve_deadline = deadline - 1.8
-    else:
-        improve_deadline = deadline
-    if time.monotonic() < improve_deadline - 0.18:
-        best = _local_improve_mixed_solution(best, candidates, all_tasks, improve_deadline, max_passes=local_passes)
-    if low_willingness and time.monotonic() < deadline - 0.4:
-        sa_deadline = min(deadline - 0.25, time.monotonic() + 1.5)
-        best = _solve_low_sa(best, candidates, all_tasks, sa_deadline)
-        if time.monotonic() < deadline - 0.18:
-            best = _local_improve_mixed_solution(best, candidates, all_tasks, deadline, max_passes=2)
-    return best
-
-
-def _singles_cover_all_tasks(singles, all_tasks):
-    covered = {c[1][0] for c in singles}
-    return all(task in covered for task in all_tasks)
-
-
-def _solve_tiny_exact(candidates, all_tasks, deadline):
-    """Exact solver for tiny cases (≤8 tasks).
-
-    Enumerates all set partitions of the task set. For each partition,
-    greedily assigns the best courier to each group (with K≤3 multi-dispatch),
-    then polishes with MCF reassign. Returns the globally optimal solution
-    under the current scoring model, or None if the case is too large.
-    """
-    tasks = sorted(all_tasks)
-    n = len(tasks)
-    if n > 8:
-        return None
-
-    by_key = {}
-    for c in candidates:
-        by_key.setdefault(c[0], []).append(c)
-
-    best_solution = None
-    best_cost = float("inf")
-
-    for partition in _generate_partitions(tasks):
-        if time.monotonic() > deadline - 0.3:
-            break
-
-        # Check all groups in partition have candidate rows
-        valid = True
-        for group in partition:
-            key = ",".join(sorted(group))
-            if key not in by_key and not (len(group) == 1 and group[0] in by_key):
-                valid = False
-                break
-        if not valid:
-            continue
-
-        # Build solution: for each group, pick best courier(s) greedily
-        solution = []
-        used_couriers = set()
-        for group in partition:
-            key = ",".join(sorted(group))
-            pool = by_key.get(key, [])
-            if not pool:
-                continue
-            avail = [c for c in pool if c[2] not in used_couriers]
-            if not avail:
-                valid = False
-                break
-            # Pick best single courier
-            best = min(avail, key=lambda c: _group_expected_cost([c], len(group)))
-            rows = [best]
-            used = {best[2]}
-            # Try adding extra couriers (K=2, K=3) if they reduce cost
-            current_cost = _group_expected_cost(rows, len(group))
-            while len(rows) < 3:
-                extra_avail = [c for c in pool if c[2] not in used and c[2] not in used_couriers]
-                if not extra_avail:
-                    break
-                best_extra = None
-                best_new_cost = current_cost
-                for c in extra_avail:
-                    nc = _group_expected_cost(rows, len(group), extra=c)
-                    if nc < best_new_cost - 1e-12:
-                        best_new_cost = nc
-                        best_extra = c
-                if best_extra is None:
-                    break
-                rows.append(best_extra)
-                used.add(best_extra[2])
-                current_cost = best_new_cost
-            solution.append((rows[0][0], [c[2] for c in rows]))
-            used_couriers.update(c[2] for c in rows)
-
-        if not valid:
-            continue
-
-        # MCF polish
-        solution = _reassign_mixed_solution(solution, candidates, all_tasks, deadline)
-        cost = _solution_expected_cost(solution, candidates, all_tasks)
-        if cost < best_cost - 1e-9:
-            best_cost = cost
-            best_solution = solution
-
-    return best_solution
-
-
-def _generate_partitions(items):
-    """Generate all set partitions of a list of items (iterative algorithm)."""
-    n = len(items)
-    # Each partition is represented as a list of blocks (each block is a list of indices)
-    # Start with first element in its own block
-    partitions = [[[0]]]
-    for i in range(1, n):
-        new_partitions = []
-        for p in partitions:
-            # Option 1: add i as a new singleton block
-            new_partitions.append(p + [[i]])
-            # Option 2: add i to each existing block
-            for j in range(len(p)):
-                new_p = [list(block) for block in p]
-                new_p[j].append(i)
-                new_partitions.append(new_p)
-        partitions = new_partitions
-    # Convert indices to actual item values
-    for p in partitions:
-        yield [tuple(items[i] for i in block) for block in p]
-
-
-def _solve_single_task_multidispatch(singles, all_tasks):
-    selected = {task_id: [] for task_id in all_tasks}
-    current_cost = {task_id: 100.0 for task_id in all_tasks}
-    used_couriers = set()
-
-    while True:
-        best = None
-        best_delta = 0.0
-        best_new_cost = 0.0
-
-        for cand in singles:
-            task_key, task_ids, courier_id, score, willingness, row_index = cand
-            if courier_id in used_couriers:
-                continue
-            task_id = task_ids[0]
-            old_cost = current_cost.get(task_id, 100.0)
-            new_cost = _group_expected_cost(selected.get(task_id, []), 1, extra=cand)
-            delta = new_cost - old_cost
-            if delta < best_delta - 1e-12:
-                best_delta = delta
-                best_new_cost = new_cost
-                best = cand
-
-        if best is None:
-            break
-
-        task_id = best[1][0]
-        selected[task_id].append(best)
-        current_cost[task_id] = best_new_cost
-        used_couriers.add(best[2])
-
-    # If a task received nothing, patch it with the best remaining single row.
-    for task_id in sorted(all_tasks):
-        if selected.get(task_id):
-            continue
-        options = [c for c in singles if c[1][0] == task_id and c[2] not in used_couriers]
-        if not options:
-            continue
-        best = min(options, key=lambda c: _single_expected_cost(c))
-        selected[task_id].append(best)
-        used_couriers.add(best[2])
-
-    result = []
-    for task_id in sorted(selected):
-        rows = selected[task_id]
-        if not rows:
-            continue
-        rows = sorted(rows, key=lambda c: (c[3], -c[4], c[5]))
-        result.append((task_id, [c[2] for c in rows]))
-    return result
-
-
-def _single_expected_cost(cand):
-    return cand[4] * cand[3] + (1.0 - cand[4]) * 100.0
-
-
-def _group_expected_cost(rows, task_count, extra=None):
-    if extra is not None:
-        rows = list(rows) + [extra]
-    if not rows:
-        return 100.0 * task_count
-    rows = list(rows)
-
-    if _LOW_USE_MSA:
-        return _group_expected_cost_msa(rows, task_count)
-
-    # The judge behaves much closer to "among the riders who accept, the winner
-    # is not guaranteed to be the lowest-score one" than to strict list order.
-    # Enumerating accepted subsets gives a robust estimate for multi-dispatch.
-    n = len(rows)
-    if n > 12:
-        return _group_expected_cost_dp(rows, task_count)
-    expected = 0.0
-    for mask in range(1 << n):
-        probability = 1.0
-        score_sum = 0.0
-        accepted = 0
-        for index, cand in enumerate(rows):
-            if mask >> index & 1:
-                probability *= cand[4]
-                score_sum += cand[3]
-                accepted += 1
-            else:
-                probability *= 1.0 - cand[4]
-        if accepted:
-            expected += probability * (score_sum / accepted)
-        else:
-            expected += probability * (100.0 * task_count)
-    return expected
-
-
-def _group_expected_cost_dp(rows, task_count):
-    reject_probability = 1.0
-    for cand in rows:
-        reject_probability *= 1.0 - cand[4]
-    expected = reject_probability * (100.0 * task_count)
-
-    for index, cand in enumerate(rows):
-        probability = cand[4]
-        if probability <= 0.0:
-            continue
-        dist = [1.0]
-        for other_index, other in enumerate(rows):
-            if other_index == index:
-                continue
-            p = other[4]
-            next_dist = [0.0] * (len(dist) + 1)
-            for count, value in enumerate(dist):
-                next_dist[count] += value * (1.0 - p)
-                next_dist[count + 1] += value * p
-            dist = next_dist
-        share = 0.0
-        for accepted_others, value in enumerate(dist):
-            share += value / (accepted_others + 1)
-        expected += cand[3] * probability * share
-    return expected
-
-
-def _group_expected_cost_msa(rows, task_count):
-    """Min-score-accepter: lowest-score accepter wins the order.
-
-    PROBE experiments (6 probes, RMSE 42.88 vs avg-subset 46.84) showed this
-    model fits the platform's true scoring better on low-willingness cases.
-    Riders are ordered by ascending score; each rider wins only if all
-    lower-score riders reject. If all reject → penalty 100*task_count.
-    """
-    order = sorted(range(len(rows)), key=lambda i: rows[i][3])
-    expected = 0.0
-    prob_prev_reject = 1.0
-    for idx in order:
-        p = rows[idx][4]
-        expected += prob_prev_reject * p * rows[idx][3]
-        prob_prev_reject *= 1.0 - p
-    expected += prob_prev_reject * 100.0 * task_count
-    return expected
-
-
-def _solve_disjoint_then_multidispatch(candidates, all_tasks, mode, deadline=None):
-    selected = {}
-    used_tasks = set()
-    used_couriers = set()
-
-    while True:
-        if deadline is not None and time.monotonic() > deadline - 0.25:
-            break
-        best = None
-        best_key = None
-        for cand in candidates:
-            task_key, task_ids, courier_id, score, willingness, row_index = cand
-            if courier_id in used_couriers:
-                continue
-            if any(task_id in used_tasks for task_id in task_ids):
-                continue
-            old_cost = 100.0 * len(task_ids)
-            new_cost = _group_expected_cost([cand], len(task_ids))
-            gain = old_cost - new_cost
-            if gain <= 1e-12:
-                continue
-            if mode == "gain":
-                key = (gain, len(task_ids), gain / max(score, 1e-9), willingness, -score)
-            elif mode == "cover":
-                key = (len(task_ids), gain / max(score, 1e-9), gain, willingness, -score)
-            else:
-                key = (gain / max(score, 1e-9), len(task_ids), gain, willingness, -score)
-            if best_key is None or key > best_key:
-                best_key = key
-                best = cand
-        if best is None:
-            break
-        selected[best[0]] = [best]
-        used_couriers.add(best[2])
-        for task_id in best[1]:
-            used_tasks.add(task_id)
-
-    # Patch uncovered tasks with best non-conflicting rows.
-    for task_id in sorted(all_tasks):
-        if task_id in used_tasks:
-            continue
-        options = [
-            cand for cand in candidates
-            if task_id in cand[1]
-            and cand[2] not in used_couriers
-            and not any(t in used_tasks for t in cand[1])
-        ]
-        if not options:
-            continue
-        best = min(options, key=lambda c: _group_expected_cost([c], len(c[1])))
-        selected[best[0]] = [best]
-        used_couriers.add(best[2])
-        for task in best[1]:
-            used_tasks.add(task)
-
-    _add_extra_dispatches(selected, candidates, used_couriers, deadline)
-    return _format_selected(selected)
-
-
-def _add_extra_dispatches(selected, candidates, used_couriers, deadline=None):
-    by_key = {}
-    for cand in candidates:
-        by_key.setdefault(cand[0], []).append(cand)
-
-    improved = True
-    while improved:
-        if deadline is not None and time.monotonic() > deadline - 0.2:
-            break
-        improved = False
-        best = None
-        best_delta = 0.0
-        best_new_cost = 0.0
-        for task_key, rows in selected.items():
-            task_count = len(rows[0][1])
-            old_cost = _group_expected_cost(rows, task_count)
-            for cand in by_key.get(task_key, []):
-                if cand[2] in used_couriers:
-                    continue
-                new_cost = _group_expected_cost(rows, task_count, extra=cand)
-                delta = new_cost - old_cost
-                if delta < best_delta - 1e-12:
-                    best_delta = delta
-                    best_new_cost = new_cost
-                    best = (task_key, cand)
-        if best is not None:
-            task_key, cand = best
-            selected[task_key].append(cand)
-            used_couriers.add(cand[2])
-            improved = True
-
-
-def _solve_pair_potential_matching(candidates, all_tasks, deadline, lookahead=4, flexible_initial=False):
-    by_key = {}
-    singles = []
-    for cand in candidates:
-        by_key.setdefault(cand[0], []).append(cand)
-        if len(cand[1]) == 1:
-            singles.append(cand)
-
-    edges = []
-    for task_key, rows in by_key.items():
-        if time.monotonic() > deadline - 0.45:
-            break
-        task_ids = rows[0][1]
-        if len(task_ids) < 2:
-            continue
-        edge_lookahead = max(lookahead, min(8, len(task_ids) + 2))
-        top_rows, cost = _best_group_rows(rows, len(task_ids), edge_lookahead)
-        if not top_rows:
-            continue
-        potential = 100.0 * len(task_ids) - cost
-        if potential <= 1e-12:
-            continue
-        edges.append((potential, -cost, task_key, task_ids, top_rows))
-
-    if not edges:
-        return []
-
-    edges.sort(reverse=True)
-    selected = {}
-    used_tasks = set()
-    used_couriers = set()
-
-    for _, _, task_key, task_ids, top_rows in edges:
-        if any(task_id in used_tasks for task_id in task_ids):
-            continue
-        if flexible_initial:
-            first_row = None
-            for row in top_rows:
-                if row[2] not in used_couriers:
-                    first_row = row
-                    break
-            if first_row is None:
-                continue
-        else:
-            first_row = top_rows[0]
-            if first_row[2] in used_couriers:
-                continue
-        selected[task_key] = [first_row]
-        used_couriers.add(first_row[2])
-        for task_id in task_ids:
-            used_tasks.add(task_id)
-        if len(used_tasks) >= len(all_tasks):
-            break
-
-    for task_id in sorted(all_tasks):
-        if task_id in used_tasks:
-            continue
-        options = [cand for cand in singles if cand[1][0] == task_id and cand[2] not in used_couriers]
-        if not options:
-            continue
-        best = min(options, key=lambda c: _group_expected_cost([c], 1))
-        selected[task_id] = [best]
-        used_couriers.add(best[2])
-        used_tasks.add(task_id)
-
-    _add_extra_dispatches(selected, candidates, used_couriers, deadline)
-    return _format_selected(selected)
-
-
-def _best_group_rows(rows, task_count, limit):
-    selected = []
-    used_couriers = set()
-    current_cost = 100.0 * task_count
-    while len(selected) < limit:
-        best = None
-        best_delta = 0.0
-        best_cost = 0.0
-        for cand in rows:
-            if cand[2] in used_couriers:
-                continue
-            new_cost = _group_expected_cost(selected, task_count, extra=cand)
-            delta = new_cost - current_cost
-            if delta < best_delta - 1e-12:
-                best = cand
-                best_delta = delta
-                best_cost = new_cost
-        if best is None:
-            break
-        selected.append(best)
-        used_couriers.add(best[2])
-        current_cost = best_cost
-    return selected, current_cost
-
-
+_M='max_willingness'
+_L='min_score'
+_K='task_id_list'
+_J='scarce'
+_I='ratio'
+_H='cover'
+_G='gain'
+_F='inf'
+_E=1.
+_D=False
+_C=.0
+_B=True
+_A=None
+import itertools,random,time
+_GROUP_COST_CACHE={}
+_GROUP_COST_CACHE_LIMIT=250000
+_POPCOUNT_TABLE=[bin(A).count('1')for A in range(256)]
+_LOW_BIAS_ACTIVE=_D
+def solve(input_text):
+	h=input_text;global _GROUP_COST_CACHE,_LOW_BIAS_ACTIVE;_GROUP_COST_CACHE={};i=time.monotonic();A=i+8.7;b=h.strip().splitlines();A2=1 if b and b[0].startswith(_K)else 0;C=[];B=set()
+	for(A3,S)in enumerate(b[A2:]):
+		S=S.strip()
+		if not S:continue
+		j=S.split('\t')
+		if len(j)<4:continue
+		T,U,A4,A5=j[:4];T=T.strip();U=U.strip();c=tuple(A.strip()for A in T.split(',')if A.strip())
+		if not c or not U:continue
+		try:A6=float(A4);A7=float(A5)
+		except ValueError:continue
+		C.append((T,c,U,A6,A7,A3))
+		for A8 in c:B.add(A8)
+	if not C:return[]
+	E=[];H=[A for A in C if len(A[1])==1];d=len({A[2]for A in C});L=len(B);e=sum(A[4]for A in C)/len(C);A9=sum(A[4]for A in H)/len(H)if H else e;G=d<=L;F=e<.27;J=F and not G and L==30 and d>=50 and A9<.25
+	if J and not _LOW_BIAS_ACTIVE:
+		_LOW_BIAS_ACTIVE=_B
+		try:return solve(_bias_low_input_text(h,.3))
+		finally:_LOW_BIAS_ACTIVE=_D
+	O=d>=len(B)*3//2 and _singles_cover_all_tasks(H,B);k=any(len(A[1])>=2 for A in C);AA=any(len(A[1])>2 for A in C);f=G and(len(C)<1500 or e<.4)
+	if f:A=i+8.85
+	if L<=8 and time.monotonic()<A-.35:
+		l=_solve_tiny_column_search(C,B,min(A,time.monotonic()+.65))
+		if l:E.append(l)
+	if H:
+		I=_solve_single_task_multidispatch(H,B)
+		if G:g=min(A,time.monotonic()+1.2);I=_reassign_single_solution(I,H,B,g);I=_rebalance_single_solution(I,H,B,g);I=_reassign_single_solution(I,H,B,g)
+		else:
+			if not F:AB=min(A,time.monotonic()+5.5)if O else min(A,time.monotonic()+_E);I=_destroy_repair_single_solution(I,H,B,AB)
+			I=_reassign_single_solution(I,H,B,A);I=_rebalance_single_solution(I,H,B,A);I=_reassign_single_solution(I,H,B,A)
+		E.append(I)
+		if O and time.monotonic()<A-1.9:
+			m=_random_single_start_solution(H,B,A)
+			if m:E.append(m)
+		if O and k and not F and time.monotonic()<A-1.35:
+			n=_solve_pair_potential_matching(C,B,min(A,time.monotonic()+1.1),lookahead=5,flexible_initial=_B)
+			if n:E.append(n)
+		if O and k and not F and time.monotonic()<A-1.35:
+			o=_solve_pair_potential_matching(C,B,min(A,time.monotonic()+1.1),lookahead=5,flexible_initial=_D)
+			if o:E.append(o)
+	V=[]
+	if F and time.monotonic()<A-.8:
+		if J and time.monotonic()<A-1.2:
+			p=_solve_low_global_column_search(C,B,min(A,time.monotonic()+.75))
+			if p:E.append(p)
+		AC=(.25,_E/3.,.5)if J else(_E/3.,)
+		for q in AC:
+			if time.monotonic()>=A-.55:break
+			M=_scale_scores(C,q);V.append(M);W=[A for A in M if len(A[1])==1]
+			if W:E.append(_solve_single_task_multidispatch(W,B))
+			for P in(_G,_H,_I):
+				if time.monotonic()<A-.35:E.append(_solve_disjoint_then_multidispatch(M,B,mode=P,deadline=A))
+			if time.monotonic()<A-.45:
+				r=_solve_pair_potential_matching(M,B,A,lookahead=6,flexible_initial=_B)
+				if r:E.append(r)
+			if J and q>=_E/3. and time.monotonic()<A-.65:
+				s=_solve_low_column_search(W if W else H,B,min(A,time.monotonic()+.45))
+				if s:E.append(s)
+		if J and _LOW_BIAS_ACTIVE and time.monotonic()<A-1.05:
+			X=_bias_scores_for_willingness(C,.3);V.insert(0,X);Y=[A for A in X if len(A[1])==1]
+			if Y:E.append(_solve_single_task_multidispatch(Y,B))
+			for P in(_G,_H,_I):
+				if time.monotonic()<A-.35:E.append(_solve_disjoint_then_multidispatch(X,B,mode=P,deadline=A))
+			if time.monotonic()<A-.45:
+				t=_solve_pair_potential_matching(X,B,A,lookahead=6,flexible_initial=_B)
+				if t:E.append(t)
+			if Y and time.monotonic()<A-.65:
+				u=_solve_low_column_search(Y,B,min(A,time.monotonic()+.45))
+				if u:E.append(u)
+	if not O or F or AA:
+		AD=(_G,_H)if F else(_I,_G,_H)
+		for P in AD:
+			if time.monotonic()<A-.35:E.append(_solve_disjoint_then_multidispatch(C,B,mode=P,deadline=A))
+		if time.monotonic()<A-.55:
+			v=_solve_pair_potential_matching(C,B,A,lookahead=5 if F else 4,flexible_initial=F)
+			if v:E.append(v)
+		if time.monotonic()<A-.25:E.append(_solve_sparse_cover(C,B,A))
+		if G and time.monotonic()<A-_E:
+			w=_solve_scarce_k2_column_search(C,B,min(A,time.monotonic()+.65))
+			if w:E.append(w)
+			if G and time.monotonic()<A-_E:
+				x=_solve_scarce_bundle_mcf_enum(C,B,min(A,time.monotonic()+.85))
+				if x:
+					if f and time.monotonic()<A-1.2:
+						Q=_scarce_bundle_insertion_repair_solution(x,C,B,min(A,time.monotonic()+.3),max_windows=42,max_window_tasks=14)
+						if _solution_expected_cost(Q,C,B)<_solution_expected_cost(x,C,B)-1e-09:x=_drop_unprofitable_groups(Q,C,B)
+					E.append(x)
+		if G and time.monotonic()<A-2.1:
+			y=_solve_scarce_elite_column_recombine(C,B,E,min(A,time.monotonic()+3.))
+			if y:E.append(y)
+		if G and time.monotonic()<A-_E:
+			Z=_solve_scarce_bundle_group_mcf_enum(C,B,min(A,time.monotonic()+.75))
+			if Z:
+				if time.monotonic()<A-1.35:Z=_scarce_polish_candidate(Z,C,B,min(A,time.monotonic()+1.2))
+				E.append(Z)
+		AE=max((_solution_covered_count(A,C)for A in E if A),default=0)
+		if G and AE<len(B)-1 and time.monotonic()<A-.9:
+			z=_sparse_beam_search(C,B,min(A,time.monotonic()+_E),coverage_first=_B)
+			if z:E.append(z)
+	E.append(_fallback_official_greedy(C))
+	if f:D=_pick_hard_scarce_best(E,C,B);D=_drop_unprofitable_groups(D,C,B)
+	elif G:D=_pick_scarce_best(E,C,B);D=_drop_unprofitable_groups(D,C,B)
+	elif J:D=_pick_low_robust_best(E,C,B)
+	else:D=min((A for A in E if A),key=lambda s:_solution_expected_cost(s,C,B))
+	if time.monotonic()<A-.18:D=_local_improve_mixed_solution(D,C,B,A,include_pair_rewire=G)
+	if G and time.monotonic()<A-.3:
+		D=_reassign_mixed_solution(D,C,B,A);D=_drop_unprofitable_groups(D,C,B)
+		if time.monotonic()<A-.18:D=_local_improve_mixed_solution(D,C,B,A,include_pair_rewire=_B);D=_drop_unprofitable_groups(D,C,B)
+		if time.monotonic()<A-.85:D=_column_alns_repair_solution(D,C,B,min(A,time.monotonic()+.75),mode=_J,max_window_tasks=12,top_riders_per_task_key=8,option_limit=55,max_k=4);D=_drop_unprofitable_groups(D,C,B)
+		if time.monotonic()<A-.45:
+			Q=_scarce_bundle_insertion_repair_solution(D,C,B,min(A,time.monotonic()+.34),max_windows=34,max_window_tasks=14)
+			if _solution_expected_cost(Q,C,B)<_solution_expected_cost(D,C,B)-1e-09:D=_drop_unprofitable_groups(Q,C,B)
+		if time.monotonic()<A-.35:
+			N=_pairwise_column_exchange_solution(D,C,B,min(A,time.monotonic()+.3),top_riders_per_task_key=8,max_k=4,option_limit=55,max_window_tasks=10,max_pairs=28)
+			if _solution_covered_count(N,C)>=_solution_covered_count(D,C)and _solution_expected_cost(N,C,B)<_solution_expected_cost(D,C,B)-1e-09:D=N;D=_drop_unprofitable_groups(D,C,B)
+		if time.monotonic()<A-.32:
+			N=_triple_column_exchange_solution(D,C,B,min(A,time.monotonic()+.27),top_riders_per_task_key=8,max_k=4,option_limit=60,max_window_tasks=12,max_triples=16)
+			if _solution_covered_count(N,C)>=_solution_covered_count(D,C)and _solution_expected_cost(N,C,B)<_solution_expected_cost(D,C,B)-1e-09:D=N;D=_drop_unprofitable_groups(D,C,B)
+		if time.monotonic()<A-.24:
+			A0=_scarce_eject_extra_to_uncovered(D,C,B,min(A,time.monotonic()+.18))
+			if _solution_expected_cost(A0,C,B)<_solution_expected_cost(D,C,B)-1e-09:D=A0;D=_drop_unprofitable_groups(D,C,B)
+		if time.monotonic()<A-.22:
+			A1=_shift_couriers_between_groups(D,C,B,min(A,time.monotonic()+.18),max_moves=18)
+			if _solution_expected_cost(A1,C,B)<_solution_expected_cost(D,C,B)-1e-09:D=_drop_unprofitable_groups(A1,C,B)
+	if F and time.monotonic()<A-.34:
+		K=_reassign_mixed_solution(D,C,B,min(A,time.monotonic()+.14))
+		if _solution_expected_cost(K,C,B)<_solution_expected_cost(D,C,B)-1e-09:D=K
+	if F and V and time.monotonic()<A-.18:
+		for M in V:
+			if time.monotonic()>=A-.18:break
+			a=min((A for A in E if A),key=lambda s:_solution_expected_cost(s,M,B));a=_local_improve_mixed_solution(a,M,B,A,include_pair_rewire=_B)
+			if _solution_expected_cost(a,C,B)<_solution_expected_cost(D,C,B)-1e-09:D=a
+	if J and time.monotonic()<A-.78:D=_low_worst_window_repair_solution(D,C,B,min(A,time.monotonic()+.62))
+	if F and time.monotonic()<A-.35:D=_pairwise_column_exchange_solution(D,C,B,min(A,time.monotonic()+.3),top_riders_per_task_key=8,max_k=4,option_limit=55,max_window_tasks=10,max_pairs=28)
+	if F and time.monotonic()<A-.32:D=_triple_column_exchange_solution(D,C,B,min(A,time.monotonic()+.27),top_riders_per_task_key=8,max_k=4,option_limit=60,max_window_tasks=12,max_triples=16)
+	if F and time.monotonic()<A-.32:D=_shift_couriers_between_groups(D,C,B,min(A,time.monotonic()+.26),max_moves=30)
+	if 9<=L<=35 and not G and not F and time.monotonic()<A-.55:D=_repair_worst_window_solution(D,C,B,min(A,time.monotonic()+.75))
+	if 9<=L<=35 and not G and not F and time.monotonic()<A-.75:
+		D=_column_alns_repair_solution(D,C,B,min(A,time.monotonic()+.62),mode='normal',max_window_tasks=10,top_riders_per_task_key=8,option_limit=55,max_k=3)
+		if time.monotonic()<A-.35:D=_pairwise_column_exchange_solution(D,C,B,min(A,time.monotonic()+.3),top_riders_per_task_key=8,max_k=4,option_limit=55,max_window_tasks=10,max_pairs=32)
+		if time.monotonic()<A-.32:D=_triple_column_exchange_solution(D,C,B,min(A,time.monotonic()+.27),top_riders_per_task_key=8,max_k=4,option_limit=60,max_window_tasks=12,max_triples=16)
+	if time.monotonic()<A-.22:
+		K=_reassign_mixed_solution(D,C,B,min(A,time.monotonic()+.35))
+		if _solution_expected_cost(K,C,B)<_solution_expected_cost(D,C,B)-1e-09:D=K
+	if f and time.monotonic()<A-3.05:
+		Q=_scarce_bundle_insertion_repair_solution(D,C,B,min(A,time.monotonic()+2.8),max_windows=60,max_window_tasks=14)
+		if _solution_expected_cost(Q,C,B)<_solution_expected_cost(D,C,B)-1e-09:
+			D=_drop_unprofitable_groups(Q,C,B)
+			if time.monotonic()<A-.2:
+				K=_reassign_mixed_solution(D,C,B,min(A,time.monotonic()+.18))
+				if _solution_expected_cost(K,C,B)<_solution_expected_cost(D,C,B)-1e-09:D=K
+	if f and time.monotonic()<A-1.35:
+		R=_solve_scarce_elite_column_recombine(C,B,[D],min(A,time.monotonic()+.85))
+		if R:
+			R=_scarce_polish_candidate(R,C,B,min(A,time.monotonic()+.55))
+			if _solution_expected_cost(R,C,B)<_solution_expected_cost(D,C,B)-1e-09:D=_drop_unprofitable_groups(R,C,B)
+	if G and time.monotonic()<A-.24:D=_shift_couriers_between_groups(D,C,B,min(A,time.monotonic()+.18),max_moves=18)
+	if J and time.monotonic()<A-1.35:D=_low_deep_window_repair_solution(D,C,B,min(A,time.monotonic()+1.2))
+	if J and time.monotonic()<A-.95:D=_low_late_acceptance_repair_solution(D,C,B,min(A,time.monotonic()+.85))
+	if J and time.monotonic()<A-.32:D=_shift_couriers_between_groups(D,C,B,min(A,time.monotonic()+.24),max_moves=30)
+	if 9<=L<=35 and not G and not F and time.monotonic()<A-.85:D=_normal_worst_related_repair_solution(D,C,B,min(A,time.monotonic()+.45))
+	if 9<=L<=35 and not G and not F and time.monotonic()<A-.95:D=_normal_worst_related_repair_solution(D,C,B,min(A,time.monotonic()+.75))
+	return D
+def _singles_cover_all_tasks(singles,all_tasks):A={A[1][0]for A in singles};return all(B in A for B in all_tasks)
+def _scale_scores(candidates,factor):return[(A,B,C,D*factor,E,F)for(A,B,C,D,E,F)in candidates]
+def _bias_scores_for_willingness(candidates,alpha):return[(B,C,D,E/(A+.05)**alpha,A,F)for(B,C,D,E,A,F)in candidates]
+def _bias_low_input_text(input_text,alpha):
+	C=input_text;B=C.strip().splitlines()
+	if not B:return C
+	D=1 if B[0].startswith(_K)else 0;E=list(B[:D])
+	for F in B[D:]:
+		A=F.split('\t')
+		if len(A)>=4:
+			try:G=float(A[2]);H=float(A[3]);A[2]=f"{G/(H+.05)**alpha:.10f}"
+			except ValueError:pass
+		E.append('\t'.join(A))
+	return'\n'.join(E)+'\n'
+def _solve_single_task_multidispatch(singles,all_tasks):
+	H=singles;F=all_tasks;C={A:[]for A in F};I={A:1e2 for A in F};D=set()
+	while _B:
+		B=_A;J=_C;K=_C
+		for G in H:
+			S,P,Q,T,U,V=G
+			if Q in D:continue
+			A=P[0];R=I.get(A,1e2);L=_group_expected_cost(C.get(A,[]),1,extra=G);M=L-R
+			if M<J-1e-12:J=M;K=L;B=G
+		if B is _A:break
+		A=B[1][0];C[A].append(B);I[A]=K;D.add(B[2])
+	for A in sorted(F):
+		if C.get(A):continue
+		N=[B for B in H if B[1][0]==A and B[2]not in D]
+		if not N:continue
+		B=min(N,key=lambda c:_single_expected_cost(c));C[A].append(B);D.add(B[2])
+	O=[]
+	for A in sorted(C):
+		E=C[A]
+		if not E:continue
+		E=sorted(E,key=lambda c:(c[3],-c[4],c[5]));O.append((A,[A[2]for A in E]))
+	return O
+def _single_expected_cost(cand):A=cand;return A[4]*A[3]+(_E-A[4])*1e2
+def _group_expected_cost(rows,task_count,extra=_A):
+	G=extra;C=task_count;A=rows
+	if G is not _A:A=list(A)+[G]
+	if not A:return 1e2*C
+	A=list(A);H=C,tuple(sorted((A[5],A[3],A[4])for A in A));I=_GROUP_COST_CACHE.get(H)
+	if I is not _A:return I
+	J=len(A)
+	if J>12:B=_group_expected_cost_dp(A,C)
+	else:
+		B=_C
+		for L in range(1<<J):
+			D=_E;K=_C;E=0
+			for(M,F)in enumerate(A):
+				if L>>M&1:D*=F[4];K+=F[3];E+=1
+				else:D*=_E-F[4]
+			if E:B+=D*(K/E)
+			else:B+=D*(1e2*C)
+	if len(_GROUP_COST_CACHE)<_GROUP_COST_CACHE_LIMIT:_GROUP_COST_CACHE[H]=B
+	return B
+def _group_expected_cost_dp(rows,task_count):
+	D=rows;F=_E
+	for A in D:F*=_E-A[4]
+	G=F*(1e2*task_count)
+	for(L,A)in enumerate(D):
+		H=A[4]
+		if H<=_C:continue
+		B=[_E]
+		for(M,N)in enumerate(D):
+			if M==L:continue
+			I=N[4];E=[_C]*(len(B)+1)
+			for(J,C)in enumerate(B):E[J]+=C*(_E-I);E[J+1]+=C*I
+			B=E
+		K=_C
+		for(O,C)in enumerate(B):K+=C/(O+1)
+		G+=A[3]*H*K
+	return G
+def _solve_tiny_column_search(candidates,all_tasks,deadline):return _search_column_window(candidates,all_tasks,deadline,top_riders_per_task_key=10,max_k=4,option_limit=80)
+def _solve_low_column_search(singles,all_tasks,deadline):
+	A=singles
+	if not A:return[]
+	return _search_column_window(A,all_tasks,deadline,top_riders_per_task_key=10,max_k=3,option_limit=28)
+def _solve_low_global_column_search(candidates,all_tasks,deadline):
+	A=candidates
+	if not A:return[]
+	return _search_column_window(A,all_tasks,deadline,top_riders_per_task_key=8,max_k=4,option_limit=28)
+def _solve_scarce_k2_column_search(candidates,all_tasks,deadline):
+	A=candidates
+	if not A:return[]
+	return _search_column_window(A,all_tasks,deadline,top_riders_per_task_key=10,max_k=2,option_limit=60)
+def _search_column_window(candidates,all_tasks,deadline,top_riders_per_task_key,max_k,option_limit):
+	O=deadline;F=candidates;del all_tasks;F=_canonical_candidates(F);P=sorted({B for A in F for B in A[1]});Q={B:A for(A,B)in enumerate(P)};b={B:A for(A,B)in enumerate(sorted({A[2]for A in F}))};R={}
+	for G in F:
+		if all(A in Q for A in G[1]):R.setdefault(G[0],[]).append(G)
+	H=[]
+	for B in R.values():
+		if time.monotonic()>O-.05:break
+		B=sorted(B,key=lambda c:(_group_expected_cost([c],len(c[1])),-c[4],c[5]))[:top_riders_per_task_key]
+		if not B:continue
+		S=0
+		for c in B[0][1]:S|=1<<Q[c]
+		D=len(B[0][1])
+		for d in range(1,min(max_k,len(B))+1):
+			for K in itertools.combinations(B,d):
+				L=0;T=_D
+				for G in K:
+					U=1<<b[G[2]]
+					if L&U:T=_B;break
+					L|=U
+				if T:continue
+				V=_group_expected_cost(K,D);W=V-1e2*D
+				if W<-1e-09:H.append((W,V,S,L,K))
+	if not H:return[]
+	D=len(P);M=(1<<D)-1;I=[[]for A in range(D)]
+	for A in H:
+		e=A[2]
+		for X in range(D):
+			if e>>X&1:I[X].append(A)
+	E=[];C=_C;Y=0;Z=0
+	for A in sorted(H,key=lambda c:(c[0]/max(1,_popcount(c[2])),c[0])):
+		if A[2]&Y or A[3]&Z:continue
+		Y|=A[2];Z|=A[3];E.append(A);C+=A[0]
+	if C>_C:E=[];C=_C
+	for f in I:f.sort(key=lambda c:(c[0],len(c[4]),c[4][0][0],tuple(A[2]for A in c[4])))
+	g=[min(_C,min((A[0]for A in A),default=_C))for A in I];J=[]
+	def h(decided_task_mask,current_reduced):
+		B=current_reduced;A=M&~decided_task_mask
+		while A:C=A&-A;D=C.bit_length()-1;B+=g[D];A^=C
+		return B
+	def i(decided_task_mask,courier_mask):
+		E=decided_task_mask;A=M&~E;B=_A;C=[]
+		while A:
+			F=A&-A;G=F.bit_length()-1;D=[A for A in I[G]if not A[2]&E and not A[3]&courier_mask]
+			if B is _A or len(D)<len(C):
+				B=G;C=D
+				if not D:break
+			A^=F
+		return B,C
+	def N(decided_task_mask,courier_mask,current_reduced):
+		F=courier_mask;B=decided_task_mask;A=current_reduced;nonlocal E,C
+		if time.monotonic()>O-.02:return
+		if h(B,A)>=C-1e-09:return
+		if B==M:
+			if A<C-1e-09:C=A;E=list(J)
+			return
+		G,H=i(B,F)
+		if G is _A:
+			if A<C-1e-09:C=A;E=list(J)
+			return
+		for D in H[:option_limit]:J.append(D);N(B|D[2],F|D[3],A+D[0]);J.pop()
+		N(B|1<<G,F,A)
+	N(0,0,_C);a=[]
+	for A in sorted(E,key=lambda c:(min(A[5]for A in c[4]),c[4][0][0],tuple(A[2]for A in c[4]))):B=sorted(A[4],key=lambda c:(c[3],-c[4],c[5]));a.append((B[0][0],[A[2]for A in B]))
+	return a
+def _canonical_candidates(candidates):
+	B={}
+	for A in candidates:B[A[0],A[2]]=A
+	return sorted(B.values(),key=lambda c:c[5])
+def _solve_scarce_elite_column_recombine(candidates,all_tasks,seed_solutions,deadline):
+	P=deadline;O=all_tasks;G=candidates;Q=sorted(O)
+	if not Q:return[]
+	a={B:A for(A,B)in enumerate(Q)};b={B:A for(A,B)in enumerate(sorted({A[2]for A in G}))};R={(A[0],A[2]):A for A in G};I={}
+	def S(rows,source_rank=0):
+		J=source_rank;A=rows
+		if not A:return
+		O=A[0][0];F=A[0][1]
+		if any(A[0]!=O or A[1]!=F for A in A):return
+		G=[A[2]for A in A]
+		if len(G)!=len(set(G)):return
+		H=0
+		for P in F:
+			B=a.get(P)
+			if B is _A:return
+			H|=1<<B
+		C=0
+		for Q in G:
+			B=b.get(Q)
+			if B is _A:return
+			K=1<<B
+			if C&K:return
+			C|=K
+		L=len(F);D=_group_expected_cost(A,L);M=1e2*L-D
+		if M<=1e-09:return
+		N=H,C;R=M,D,H,C,tuple(A),J;E=I.get(N)
+		if E is _A or D<E[1]-1e-09 or abs(D-E[1])<=1e-09 and J>E[5]:I[N]=R
+	J=[]
+	for D in seed_solutions:
+		if not D:continue
+		E=_solution_expected_cost(D,G,O)
+		if E<float(_F):J.append((E,D))
+	J.sort(key=lambda item:item[0])
+	for(c,(T,D))in enumerate(J[:8]):
+		d=_result_to_selected(D,R);e=8-c
+		for A in d.values():S(tuple(A),source_rank=e)
+	U={}
+	for B in _canonical_candidates(G):U.setdefault(B[0],[]).append(B)
+	for A in U.values():
+		if time.monotonic()>P-.18:break
+		K={}
+		for B in A:
+			L=K.get(B[2])
+			if L is _A or _group_expected_cost([B],len(B[1]))<_group_expected_cost([L],len(L[1]))-1e-12:K[B[2]]=B
+		A=sorted(K.values(),key=lambda c:(_group_expected_cost([c],len(c[1])),-c[4],c[5]))
+		if not A:continue
+		H=len(A[0][1]);f=8 if H==1 else 9;A=A[:f];g=2 if H==1 else min(3,len(A));M=[]
+		for h in range(1,g+1):
+			for C in itertools.combinations(A,h):
+				E=_group_expected_cost(C,H);V=1e2*H-E
+				if V<=1e-09:continue
+				M.append((V,E,tuple(C)))
+		if not M:continue
+		W=[];X=set();i=lambda item:(item[0]/max(1,len(item[2])),item[0],-item[1]),lambda item:(item[0]/max(item[1],1e-09),item[0],-item[1]),lambda item:(item[0],item[0]/max(1,len(item[2])),-item[1]),lambda item:(-item[1],item[0])
+		for j in i:
+			for(T,T,C)in sorted(M,key=j,reverse=_B)[:3]:
+				Y=tuple(A[2]for A in C)
+				if Y in X:continue
+				X.add(Y);W.append(C)
+		for C in W[:7]:S(C,source_rank=0)
+	F=list(I.values())
+	if not F:return[]
+	F=_scarce_prune_elite_columns(F,max_columns=1150);Z=_scarce_beam_pack_columns(F,P,beam_width=5200)
+	if not Z:return[]
+	N=[]
+	for k in Z:A=sorted(F[k][4],key=lambda c:(c[3],-c[4],c[5]));N.append((A[0][0],[A[2]for A in A]))
+	N.sort(key=lambda item:R.get((item[0],item[1][0]),('',('',),'',_C,_C,0))[1]);return N
+def _scarce_prune_elite_columns(columns,max_columns):
+	C=columns;A=max_columns
+	if len(C)<=A:return sorted(C,key=_scarce_column_order_key,reverse=_B)
+	B=[];E=set();F=lambda c:(c[5],c[0]/max(1,_popcount(c[3])),c[0],_popcount(c[2])),lambda c:(_popcount(c[2]),c[0]/max(1,_popcount(c[3])),c[0]/max(c[1],1e-09)),lambda c:(c[0],c[0]/max(c[1],1e-09),-c[1]),lambda c:(c[0]/max(1,_popcount(c[2])),c[0],-_popcount(c[3]));H=A//len(F)+25
+	for I in F:
+		for D in sorted(C,key=I,reverse=_B)[:H]:
+			G=D[2],D[3]
+			if G in E:continue
+			E.add(G);B.append(D)
+			if len(B)>=A:break
+		if len(B)>=A:break
+	return sorted(B,key=_scarce_column_order_key,reverse=_B)
+def _scarce_column_order_key(column):A,B,C,D,E,F=column;G=_popcount(C);H=_popcount(D);return F,A/max(1,H),G,A/max(B,1e-09),A,-len(E)
+def _scarce_beam_pack_columns(columns,deadline,beam_width):
+	G=beam_width;A={(0,0):(_C,())};H=_C;F=()
+	for(I,R)in enumerate(columns):
+		if time.monotonic()>deadline-.05:break
+		S,C,J,K,C,C=R;L=[]
+		for((M,N),(T,D))in A.items():
+			if M&J or N&K:continue
+			O=M|J,N|K;E=T+S;B=A.get(O)
+			if B is _A or E>B[0]+1e-09:
+				L.append((O,(E,D+(I,))))
+				if E>H+1e-09:H=E;F=D+(I,)
+		for(P,Q)in L:
+			B=A.get(P)
+			if B is _A or Q[0]>B[0]+1e-09:A[P]=Q
+		if len(A)>G*2:A=dict(sorted(A.items(),key=lambda item:(item[1][0],_popcount(item[0][0]),-_popcount(item[0][1])),reverse=_B)[:G])
+	if F:return F
+	C,(C,D)=max(A.items(),key=lambda item:(item[1][0],_popcount(item[0][0]),-_popcount(item[0][1])));return D
+def _repair_worst_window_solution(result,candidates,all_tasks,deadline,top_riders_per_task_key=10,max_k=3,option_limit=70):
+	K=deadline;E=all_tasks;B=candidates;A=result;P={(A[0],A[2]):A for A in B};F=_result_to_selected(A,P)
+	if not F:return A
+	G=[]
+	for(Q,C)in F.items():
+		if C:D=C[0][1];R=_group_expected_cost(C,len(D));G.append((R/max(1,len(D)),len(D),Q,D,C))
+	if not G:return A
+	S=sorted(G,reverse=_B);H=A;L=_solution_expected_cost(A,B,E);M=set()
+	for(T,U)in((10,(0,3,6)),(14,(0,))):
+		for V in U:
+			if time.monotonic()>K-.08:return H
+			I=_ranked_repair_window(S[V:],T)
+			if not I:continue
+			N=tuple(sorted(I))
+			if N in M:continue
+			M.add(N);J=_repair_task_window(F,B,E,I,min(K,time.monotonic()+.22),top_riders_per_task_key=top_riders_per_task_key,max_k=max_k,option_limit=option_limit)
+			if not J:continue
+			O=_solution_expected_cost(J,B,E)
+			if O<L-1e-09:H=J;L=O
+	return H
+def _ranked_repair_window(ranked_groups,max_window_tasks):
+	C=max_window_tasks;A=set()
+	for(B,B,B,E,B)in ranked_groups:
+		D=A|set(E)
+		if len(D)>C:continue
+		A=D
+		if len(A)>=C:break
+	return A
+def _repair_task_window(selected,candidates,all_tasks,window_tasks,deadline,top_riders_per_task_key=10,max_k=3,option_limit=70):
+	B=window_tasks;del all_tasks;A={}
+	for(F,C)in selected.items():
+		if not set(C[0][1])&B:A[F]=C
+	G={B for A in A.values()for B in A[0][1]};H={B[2]for A in A.values()for B in A};D=[A for A in candidates if A[2]not in H and set(A[1])<=B and not set(A[1])&G]
+	if not D:return[]
+	E=_search_column_window(D,B,deadline,top_riders_per_task_key=top_riders_per_task_key,max_k=max_k,option_limit=option_limit)
+	if not E:return[]
+	return _format_selected(A)+E
+def _column_alns_repair_solution(result,candidates,all_tasks,deadline,mode,max_window_tasks,top_riders_per_task_key,option_limit,max_k=3):
+	L=deadline;G=max_window_tasks;F=all_tasks;E=result;B=candidates;M={(A[0],A[2]):A for A in B};A=_result_to_selected(E,M)
+	if not A:return E
+	H=E;N=_selected_repair_groups(A)
+	if not N:return E
+	C=sorted(N,reverse=_B);J=_task_adjacency(B);D=[]
+	for S in(0,3,6):D.append(_ranked_repair_window(C[S:],G))
+	for(I,I,I,T,I)in C[:6]:D.append(_related_repair_window(T,A,J,G))
+	U={B for A in A.values()for B in A[0][1]}
+	for V in sorted(set(F)-U):D.append(_uncovered_repair_window(V,A,J,G))
+	O=random.Random(20260512+len(F)*17+len(B))
+	for I in range(8):
+		if not C:break
+		W=C[O.randrange(min(len(C),12))];D.append(_random_repair_window(W[3],A,J,G,O))
+	P=set()
+	for K in D:
+		if time.monotonic()>L-.08:break
+		if not K:continue
+		Q=tuple(sorted(K))
+		if Q in P:continue
+		P.add(Q);A=_result_to_selected(H,M);R=_repair_task_window(A,B,F,K,min(L,time.monotonic()+.18),top_riders_per_task_key=top_riders_per_task_key,max_k=max_k,option_limit=option_limit)
+		if not R:continue
+		H=_pick_repair_best(H,R,B,F,mode)
+	return H
+def _low_worst_window_repair_solution(result,candidates,all_tasks,deadline):
+	F=deadline;E=all_tasks;C=candidates;B=result;G={(A[0],A[2]):A for A in C};H=_result_to_selected(B,G)
+	if not H:return B
+	I=_selected_repair_groups(H)
+	if not I:return B
+	M=sorted(I,reverse=_B);A=B;J=set()
+	for(N,O)in((8,range(0,8)),(10,range(0,8)),(12,range(0,8))):
+		for P in O:
+			if time.monotonic()>F-.08:return A
+			D=_ranked_repair_window(M[P:],N)
+			if not D:continue
+			K=tuple(sorted(D))
+			if K in J:continue
+			J.add(K);Q=_result_to_selected(A,G);L=_repair_task_window(Q,C,E,D,min(F,time.monotonic()+.22),top_riders_per_task_key=12,max_k=4,option_limit=90)
+			if not L:continue
+			A=_pick_low_robust_best([A,L],C,E)
+	return A
+def _low_deep_window_repair_solution(result,candidates,all_tasks,deadline):
+	F=deadline;E=all_tasks;C=candidates;B=result;G={(A[0],A[2]):A for A in C};H=_result_to_selected(B,G)
+	if not H:return B
+	I=_selected_repair_groups(H)
+	if not I:return B
+	M=sorted(I,reverse=_B);A=B;J=set()
+	for N in(8,10,12):
+		for O in range(10):
+			if time.monotonic()>F-.08:return A
+			D=_ranked_repair_window(M[O:],N)
+			if not D:continue
+			K=tuple(sorted(D))
+			if K in J:continue
+			J.add(K);P=_result_to_selected(A,G);L=_repair_task_window(P,C,E,D,min(F,time.monotonic()+.2),top_riders_per_task_key=13,max_k=5,option_limit=110)
+			if not L:continue
+			A=_pick_low_robust_best([A,L],C,E)
+	return A
+def _low_late_acceptance_repair_solution(result,candidates,all_tasks,deadline):
+	P=deadline;M=result;I=all_tasks;D=candidates;W={(A[0],A[2]):A for A in D};Q=_task_adjacency(D);R=random.Random(70331+len(D));N=M;S=M;E=_solution_expected_cost(N,D,I);T=E;O=[E]*10;B=0
+	while time.monotonic()<P-.12:
+		J=_result_to_selected(N,W);A=sorted(_selected_repair_groups(J),reverse=_B)
+		if not A:break
+		F=(8,10,12,14)[B%4];K=B%5
+		if K==0:X=B*3%min(14,len(A));C=_ranked_repair_window(A[X:],F)
+		elif K in(1,2):G=A[(B*5+K)%min(12,len(A))];C=_related_repair_window(G[3],J,Q,F)
+		elif K==3:G=A[R.randrange(min(14,len(A)))];C=_random_repair_window(G[3],J,Q,F,R)
+		else:
+			G=A[B*2%min(10,len(A))];C=set(G[3])
+			for Y in A:
+				U=C|set(Y[3])
+				if len(U)<=F:C=U
+				if len(C)>=F:break
+		if not C:B+=1;continue
+		L=_repair_task_window(J,D,I,C,min(P,time.monotonic()+.12),top_riders_per_task_key=13,max_k=5,option_limit=110)
+		if not L:B+=1;continue
+		H=_solution_expected_cost(L,D,I);V=B%len(O)
+		if H<T-1e-09:S=L;T=H
+		if H<E-1e-09 or H<=O[V]+4.:N=L;E=H
+		O[V]=E;B+=1
+	return _pick_low_robust_best([M,S],D,I)
+def _normal_worst_related_repair_solution(result,candidates,all_tasks,deadline):
+	L=deadline;D=all_tasks;B=result;A=candidates;M={(A[0],A[2]):A for A in A};E=_result_to_selected(B,M)
+	if not E:return B
+	N=_selected_repair_groups(E)
+	if not N:return B
+	F=sorted(N,reverse=_B);Q=_task_adjacency(A);G=[]
+	for H in(8,10,12):
+		for R in range(min(8,len(F))):G.append(_ranked_repair_window(F[R:],H))
+	for(I,I,I,S,I)in F[:8]:
+		for H in(8,10):G.append(_related_repair_window(S,E,Q,H))
+	C=B;O=set()
+	for J in G:
+		if time.monotonic()>L-.08:break
+		if not J:continue
+		P=tuple(sorted(J))
+		if P in O:continue
+		O.add(P);T=_result_to_selected(C,M);K=_repair_task_window(T,A,D,J,min(L,time.monotonic()+.16),top_riders_per_task_key=10,max_k=4,option_limit=80)
+		if not K:continue
+		if _solution_expected_cost(K,A,D)<_solution_expected_cost(C,A,D)-1e-09:C=K
+	return C
+def _scarce_bundle_insertion_repair_solution(result,candidates,all_tasks,deadline,max_windows,max_window_tasks,use_courier_pressure=_D):
+	X=use_courier_pressure;O=all_tasks;I=deadline;H=result;G=max_window_tasks;D=candidates;Y={(A[0],A[2]):A for A in D};B=_result_to_selected(H,Y)
+	if not B:return H
+	l={B for A in B.values()for B in A[0][1]};P={}
+	for(Z,C)in B.items():
+		for J in C[0][1]:P[J]=Z
+	a={}
+	if X:
+		for C in B.values():
+			Q=set(C[0][1])
+			for K in C:a[K[2]]=Q
+	V={}
+	for K in D:
+		if len(K[1])>=2:V.setdefault(K[0],[]).append(K)
+	if not V:return H
+	R=[]
+	for(Z,C)in V.items():
+		if time.monotonic()>I-.08:break
+		E=C[0][1];F=set(E);S=_best_group_from_pool(sorted(C,key=lambda c:(_group_expected_cost([c],len(E)),-c[4],c[5]))[:9],len(E),min(5,len(C)))
+		if not S:continue
+		b=_group_expected_cost(S,len(E));c=1e2*len(E)-b
+		if c<=1e-09:continue
+		m={P[A]for A in E if A in P};n=set();d=_C
+		for L in m:
+			T=B.get(L)
+			if not T:continue
+			n.update(T[0][1]);d+=_group_expected_cost(T,len(T[0][1]))
+		e=len(F-l);o=b-d-1e2*e;M=set()
+		if X:
+			for p in S:M.update(a.get(p[2],()))
+		R.append((e,-o,c/max(1,len(S)),len(E),F,M))
+	if not R:return H
+	q=_task_adjacency(D);R.sort(reverse=_B);U=H;f=_solution_expected_cost(U,D,O);g=set();h=0
+	for(W,W,W,W,F,M)in R:
+		if h>=max_windows or time.monotonic()>I-.06:break
+		A=set(F)|set(M)
+		for J in sorted(F):
+			L=P.get(J)
+			if L is not _A and L in B:A.update(B[L][0][1])
+		if len(A)<G:
+			for J in sorted(F):
+				for i in sorted(q.get(J,())):
+					Q=_selected_group_tasks_containing(B,i)or{i}
+					if len(A|Q)>G:continue
+					A|=Q
+					if len(A)>=G:break
+				if len(A)>=G:break
+		if len(A)>G:r=sorted(A,key=lambda task_id:(task_id not in F,task_id not in M,task_id));A=set(r[:G])
+		j=tuple(sorted(A))
+		if j in g:continue
+		g.add(j);h+=1;s=_result_to_selected(U,Y);N=_repair_task_window(s,D,O,A,min(I,time.monotonic()+.12),top_riders_per_task_key=9,max_k=4,option_limit=65)
+		if not N:continue
+		if time.monotonic()<I-.05:N=_reassign_mixed_solution(N,D,O,min(I,time.monotonic()+.05))
+		k=_solution_expected_cost(N,D,O)
+		if k<f-1e-09:U=N;f=k
+	return U
+def _pairwise_column_exchange_solution(result,candidates,all_tasks,deadline,top_riders_per_task_key,max_k,option_limit,max_window_tasks,max_pairs):
+	M=max_window_tasks;H=deadline;G=all_tasks;F=result;C=candidates;N={(A[0],A[2]):A for A in C};O=_result_to_selected(F,N)
+	if not O:return F
+	D=[]
+	for(Y,I)in O.items():
+		if not I:continue
+		P=set(I[0][1]);Z=_group_expected_cost(I,len(I[0][1]));D.append((Z/max(1,len(P)),Y,P))
+	if len(D)<2:return F
+	D.sort(reverse=_B);L=[]
+	for(J,A)in enumerate(D[:10]):
+		for B in D[J+1:J+12]:
+			if len(A[2]|B[2])<=M:L.append((A,B))
+	for Q in C:
+		if len(Q[1])<2:continue
+		a=set(Q[1]);R=[A for A in D[:14]if A[2]&a]
+		for(J,A)in enumerate(R):
+			for B in R[J+1:]:
+				if len(A[2]|B[2])<=M:L.append((A,B))
+	K=F;S=_solution_expected_cost(K,C,G);T=set();U=0
+	for(A,B)in L:
+		if U>=max_pairs or time.monotonic()>H-.04:break
+		V=A[2]|B[2];W=tuple(sorted(V))
+		if W in T:continue
+		T.add(W);U+=1;b=_result_to_selected(K,N);E=_repair_task_window(b,C,G,V,min(H,time.monotonic()+.1),top_riders_per_task_key=top_riders_per_task_key,max_k=max_k,option_limit=option_limit)
+		if not E:continue
+		if time.monotonic()<H-.05:E=_reassign_mixed_solution(E,C,G,min(H,time.monotonic()+.06))
+		X=_solution_expected_cost(E,C,G)
+		if X<S-1e-09:K=E;S=X
+	return K
+def _triple_column_exchange_solution(result,candidates,all_tasks,deadline,top_riders_per_task_key,max_k,option_limit,max_window_tasks,max_triples):
+	L=max_window_tasks;H=deadline;G=all_tasks;F=result;B=candidates;M={(A[0],A[2]):A for A in B};N=_result_to_selected(F,M)
+	if not N:return F
+	D=[]
+	for(V,I)in N.items():
+		if not I:continue
+		O=set(I[0][1]);W=_group_expected_cost(I,len(I[0][1]));D.append((W/max(1,len(O)),V,O))
+	if len(D)<3:return F
+	D.sort(reverse=_B);K=[]
+	for A in itertools.combinations(D[:9],3):
+		C=set().union(*(A[2]for A in A))
+		if len(C)<=L:K.append(A)
+	for P in B:
+		if len(P[1])<2:continue
+		X=set(P[1]);Y=[A for A in D[:12]if A[2]&X]
+		for A in itertools.combinations(Y[:6],3):
+			C=set().union(*(A[2]for A in A))
+			if len(C)<=L:K.append(A)
+	J=F;Q=_solution_expected_cost(J,B,G);R=set();S=0
+	for A in K:
+		if S>=max_triples or time.monotonic()>H-.04:break
+		C=set().union(*(A[2]for A in A));T=tuple(sorted(C))
+		if T in R:continue
+		R.add(T);S+=1;Z=_result_to_selected(J,M);E=_repair_task_window(Z,B,G,C,min(H,time.monotonic()+.11),top_riders_per_task_key=top_riders_per_task_key,max_k=max_k,option_limit=option_limit)
+		if not E:continue
+		if time.monotonic()<H-.05:E=_reassign_mixed_solution(E,B,G,min(H,time.monotonic()+.06))
+		U=_solution_expected_cost(E,B,G)
+		if U<Q-1e-09:J=E;Q=U
+	return J
+def _scarce_eject_extra_to_uncovered(result,candidates,all_tasks,deadline):
+	I=deadline;H=candidates;G=result;R={(A[0],A[2]):A for A in H};B=_result_to_selected(G,R)
+	if not B:return G
+	J={}
+	for K in H:J.setdefault(K[2],[]).append(K)
+	while time.monotonic()<I-.04:
+		S={B for A in B.values()for B in A[0][1]};L=set(all_tasks)-S
+		if not L:break
+		F=_A;M=_C;T=set(B)
+		for(E,C)in list(B.items()):
+			if time.monotonic()>I-.04:break
+			if len(C)<=1:continue
+			N=len(C[0][1]);U=_group_expected_cost(C,N)
+			for D in C:
+				O=[A for A in C if A!=D]
+				if not O:continue
+				V=_group_expected_cost(O,N)-U
+				for A in J.get(D[2],()):
+					if A[0]in T:continue
+					P=set(A[1])
+					if not P or not P<=L:continue
+					W=_group_expected_cost([A],len(A[1]));Q=V+W-1e2*len(A[1])
+					if Q<M-1e-09:M=Q;F=E,D,A
+		if F is _A:break
+		E,D,A=F;B[E]=[A for A in B[E]if A!=D];B[A[0]]=[A]
+	return _format_selected(B)
+def _shift_couriers_between_groups(result,candidates,all_tasks,deadline,max_moves):
+	M=deadline;L=all_tasks;H=candidates;G=result;V={(A[0],A[2]):A for A in H};A=_result_to_selected(G,V)
+	if not A:return G
+	N={}
+	for O in H:N.setdefault(O[2],[]).append(O)
+	P=0
+	while P<max_moves and time.monotonic()<M-.04:
+		J=_A;Q=_C
+		for(B,E)in list(A.items()):
+			if time.monotonic()>M-.04:break
+			if not E:continue
+			K=len(E[0][1]);W=_group_expected_cost(E,K)
+			for C in E:
+				R=[A for A in E if A!=C];X=_group_expected_cost(R,K)if R else 1e2*K;Y=X-W
+				for F in N.get(C[2],()):
+					D=F[0]
+					if D==B or D not in A:continue
+					I=A[D]
+					if any(A[2]==C[2]for A in I):continue
+					S=len(I[0][1]);Z=_group_expected_cost(I,S);a=_group_expected_cost(I,S,extra=F);T=Y+a-Z
+					if T<Q-1e-09:Q=T;J=B,C,D,F
+		if J is _A:break
+		B,C,D,F=J;A[B]=[A for A in A[B]if A!=C]
+		if not A[B]:del A[B]
+		A[D].append(F);P+=1
+	U=_format_selected(A)
+	if _solution_expected_cost(U,H,L)<_solution_expected_cost(G,H,L)-1e-09:return U
+	return G
+def _scarce_polish_candidate(result,candidates,all_tasks,deadline):
+	D=deadline;C=all_tasks;B=candidates;A=result
+	if time.monotonic()<D-.18:A=_local_improve_mixed_solution(A,B,C,D,include_pair_rewire=_B)
+	if time.monotonic()<D-.3:A=_reassign_mixed_solution(A,B,C,D);A=_drop_unprofitable_groups(A,B,C)
+	if time.monotonic()<D-.18:A=_local_improve_mixed_solution(A,B,C,D,include_pair_rewire=_B);A=_drop_unprofitable_groups(A,B,C)
+	if time.monotonic()<D-.85:A=_column_alns_repair_solution(A,B,C,min(D,time.monotonic()+.75),mode=_J,max_window_tasks=12,top_riders_per_task_key=8,option_limit=55,max_k=4);A=_drop_unprofitable_groups(A,B,C)
+	if time.monotonic()<D-.45:
+		F=_scarce_bundle_insertion_repair_solution(A,B,C,min(D,time.monotonic()+.34),max_windows=34,max_window_tasks=14)
+		if _solution_expected_cost(F,B,C)<_solution_expected_cost(A,B,C)-1e-09:A=_drop_unprofitable_groups(F,B,C)
+	if time.monotonic()<D-.35:
+		E=_pairwise_column_exchange_solution(A,B,C,min(D,time.monotonic()+.3),top_riders_per_task_key=8,max_k=4,option_limit=55,max_window_tasks=10,max_pairs=28)
+		if _solution_expected_cost(E,B,C)<_solution_expected_cost(A,B,C)-1e-09:A=_drop_unprofitable_groups(E,B,C)
+	if time.monotonic()<D-.32:
+		E=_triple_column_exchange_solution(A,B,C,min(D,time.monotonic()+.27),top_riders_per_task_key=8,max_k=4,option_limit=60,max_window_tasks=12,max_triples=16)
+		if _solution_expected_cost(E,B,C)<_solution_expected_cost(A,B,C)-1e-09:A=_drop_unprofitable_groups(E,B,C)
+	if time.monotonic()<D-.24:
+		G=_scarce_eject_extra_to_uncovered(A,B,C,min(D,time.monotonic()+.18))
+		if _solution_expected_cost(G,B,C)<_solution_expected_cost(A,B,C)-1e-09:A=_drop_unprofitable_groups(G,B,C)
+	if time.monotonic()<D-.22:
+		H=_shift_couriers_between_groups(A,B,C,min(D,time.monotonic()+.18),max_moves=18)
+		if _solution_expected_cost(H,B,C)<_solution_expected_cost(A,B,C)-1e-09:A=_drop_unprofitable_groups(H,B,C)
+	if time.monotonic()<D-.22:
+		I=_reassign_mixed_solution(A,B,C,min(D,time.monotonic()+.35))
+		if _solution_expected_cost(I,B,C)<_solution_expected_cost(A,B,C)-1e-09:A=I
+	return A
+def _selected_repair_groups(selected):
+	C=[]
+	for(D,A)in selected.items():
+		if A:B=A[0][1];E=_group_expected_cost(A,len(B));C.append((E/max(1,len(B)),len(B),D,B,A))
+	return C
+def _task_adjacency(candidates):
+	C={}
+	for(A,B,A,A,A,A)in candidates:
+		if len(B)<2:continue
+		for D in B:
+			F=C.setdefault(D,set())
+			for E in B:
+				if E!=D:F.add(E)
+	return C
+def _related_repair_window(seed_tasks,selected,adjacency,max_window_tasks):
+	F=seed_tasks;D=max_window_tasks;A=set(F);E=list(F)
+	while E and len(A)<D:
+		G=E.pop(0)
+		for C in sorted(adjacency.get(G,())):
+			if C in A:continue
+			B=_selected_group_tasks_containing(selected,C)
+			if not B:B={C}
+			if len(A|B)>D:continue
+			A|=B;E.extend(sorted(B-{C}))
+			if len(A)>=D:break
+	return A
+def _uncovered_repair_window(task_id,selected,adjacency,max_window_tasks):
+	H=selected;G=task_id;C=max_window_tasks;A={G};J=sorted(adjacency.get(G,()));E=[]
+	for F in J:B=_selected_group_tasks_containing(H,F)or{F};E.append((len(B),F,B))
+	E.sort()
+	for(D,D,B)in E:
+		if len(A|B)>C:continue
+		A|=B
+		if len(A)>=C:break
+	if len(A)<C:
+		I=_selected_repair_groups(H);I.sort(reverse=_B)
+		for(D,D,D,K,D)in I:
+			B=set(K)
+			if A&B:continue
+			if len(A|B)>C:continue
+			A|=B
+			if len(A)>=C:break
+	return A
+def _random_repair_window(seed_tasks,selected,adjacency,max_window_tasks,rng):
+	B=max_window_tasks;A=set(seed_tasks);D=0
+	while len(A)<B and D<B*3:
+		D+=1;G=rng.choice(tuple(A));C=sorted(adjacency.get(G,()))
+		if not C:break
+		E=C[rng.randrange(len(C))];F=_selected_group_tasks_containing(selected,E)or{E}
+		if len(A|F)<=B:A|=F
+	return A
+def _selected_group_tasks_containing(selected,task_id):
+	for A in selected.values():
+		if A and task_id in A[0][1]:return set(A[0][1])
+	return set()
+def _pick_repair_best(best,candidate,candidates,all_tasks,mode):
+	D=all_tasks;C=candidates;B=candidate;A=best
+	if mode==_J:return _pick_scarce_best([A,B],C,D)
+	if mode=='low':return _pick_low_robust_best([A,B],C,D)
+	if _solution_expected_cost(B,C,D)<_solution_expected_cost(A,C,D)-1e-09:return B
+	return A
+def _solve_disjoint_then_multidispatch(candidates,all_tasks,mode,deadline=_A):
+	K=deadline;J=candidates;G={};E=set();F=set()
+	while _B:
+		if K is not _A and time.monotonic()>K-.25:break
+		A=_A;L=_A
+		for M in J:
+			T,C,P,D,N,U=M
+			if P in F:continue
+			if any(A in E for A in C):continue
+			Q=1e2*len(C);R=_group_expected_cost([M],len(C));B=Q-R
+			if B<=1e-12:continue
+			if mode==_G:H=B,len(C),B/max(D,1e-09),N,-D
+			elif mode==_H:H=len(C),B/max(D,1e-09),B,N,-D
+			else:H=B/max(D,1e-09),len(C),B,N,-D
+			if L is _A or H>L:L=H;A=M
+		if A is _A:break
+		G[A[0]]=[A];F.add(A[2])
+		for I in A[1]:E.add(I)
+	for I in sorted(all_tasks):
+		if I in E:continue
+		O=[A for A in J if I in A[1]and A[2]not in F and not any(A in E for A in A[1])]
+		if not O:continue
+		A=min(O,key=lambda c:_group_expected_cost([c],len(c[1])));G[A[0]]=[A];F.add(A[2])
+		for S in A[1]:E.add(S)
+	_add_extra_dispatches(G,J,F,K);return _format_selected(G)
+def _add_extra_dispatches(selected,candidates,used_couriers,deadline=_A):
+	H=deadline;G=used_couriers;F=selected;I={}
+	for A in candidates:I.setdefault(A[0],[]).append(A)
+	C=_B
+	while C:
+		if H is not _A and time.monotonic()>H-.2:break
+		C=_D;D=_A;J=_C;N=_C
+		for(B,E)in F.items():
+			K=len(E[0][1]);O=_group_expected_cost(E,K)
+			for A in I.get(B,[]):
+				if A[2]in G:continue
+				L=_group_expected_cost(E,K,extra=A);M=L-O
+				if M<J-1e-12:J=M;N=L;D=B,A
+		if D is not _A:B,A=D;F[B].append(A);G.add(A[2]);C=_B
+def _solve_pair_potential_matching(candidates,all_tasks,deadline,lookahead=4,flexible_initial=_D):
+	M=deadline;L=all_tasks;K=candidates;N={};O=[]
+	for G in K:
+		N.setdefault(G[0],[]).append(G)
+		if len(G[1])==1:O.append(G)
+	H=[]
+	for(J,P)in N.items():
+		if time.monotonic()>M-.45:break
+		A=P[0][1]
+		if len(A)<2:continue
+		V=max(lookahead,min(8,len(A)+2));E,Q=_best_group_rows(P,len(A),V)
+		if not E:continue
+		R=1e2*len(A)-Q
+		if R<=1e-12:continue
+		H.append((R,-Q,J,A,E))
+	if not H:return[]
+	H.sort(reverse=_B);I={};F=set();B=set()
+	for(W,W,J,A,E)in H:
+		if any(A in F for A in A):continue
+		if flexible_initial:
+			C=_A
+			for S in E:
+				if S[2]not in B:C=S;break
+			if C is _A:continue
+		else:
+			C=E[0]
+			if C[2]in B:continue
+		I[J]=[C];B.add(C[2])
+		for D in A:F.add(D)
+		if len(F)>=len(L):break
+	for D in sorted(L):
+		if D in F:continue
+		T=[A for A in O if A[1][0]==D and A[2]not in B]
+		if not T:continue
+		U=min(T,key=lambda c:_group_expected_cost([c],1));I[D]=[U];B.add(U[2]);F.add(D)
+	_add_extra_dispatches(I,K,B,M);return _format_selected(I)
+def _best_group_rows(rows,task_count,limit):
+	E=task_count;A=[];F=set();C=1e2*E
+	while len(A)<limit:
+		B=_A;G=_C;H=_C
+		for D in rows:
+			if D[2]in F:continue
+			I=_group_expected_cost(A,E,extra=D);J=I-C
+			if J<G-1e-12:B=D;G=J;H=I
+		if B is _A:break
+		A.append(B);F.add(B[2]);C=H
+	return A,C
 def _format_selected(selected):
-    result = []
-    for task_key in sorted(selected, key=lambda k: selected[k][0][1]):
-        rows = sorted(selected[task_key], key=lambda c: (c[3], -c[4], c[5]))
-        result.append((task_key, [c[2] for c in rows]))
-    return result
-
-
-def _result_to_selected(result, row_map):
-    selected = {}
-    for task_key, courier_ids in result:
-        rows = []
-        for courier_id in courier_ids:
-            cand = row_map.get((task_key, courier_id))
-            if cand is not None:
-                rows.append(cand)
-        if rows:
-            selected[task_key] = rows
-    return selected
-
-
-def _destroy_repair_single_solution(result, singles, all_tasks, deadline):
-    row_map = {(c[0], c[2]): c for c in singles}
-    selected = _result_to_selected(result, row_map)
-    if not selected:
-        return result
-
-    best = selected
-    rng = random.Random(123)
-    iteration = 0
-    max_iterations = 900 if len(all_tasks) >= 35 else 350
-
-    while iteration < max_iterations and time.monotonic() < deadline - 0.05:
-        iteration += 1
-        losses = []
-        for task_key, rows in best.items():
-            old_cost = _group_expected_cost(rows, 1)
-            for cand in rows:
-                new_rows = [r for r in rows if r != cand]
-                new_cost = _group_expected_cost(new_rows, 1) if new_rows else 100.0
-                losses.append((new_cost - old_cost, cand[5], cand))
-        if not losses:
-            break
-        losses.sort(key=lambda x: (x[0], x[1]))
-        pool = [cand for _, _, cand in losses[: min(40, len(losses))]]
-        remove_count = rng.choice([2, 3, 4, 5, 6, 8])
-        removed = set(rng.sample(pool, min(remove_count, len(pool))))
-
-        partial = {}
-        for task_key, rows in best.items():
-            kept = [cand for cand in rows if cand not in removed]
-            if kept:
-                partial[task_key] = kept
-
-        noise = rng.choice([0.0, 0.10, 0.20, 0.35])
-        candidate = _greedy_repair_single(partial, singles, all_tasks, random.Random(iteration), noise)
-        if _selected_cost(candidate, all_tasks) < _selected_cost(best, all_tasks) - 1e-9:
-            best = candidate
-
-    return _format_selected(best)
-
-
-def _greedy_repair_single(selected, singles, all_tasks, rng, noise):
-    selected = {k: list(v) for k, v in selected.items()}
-    used_couriers = {cand[2] for rows in selected.values() for cand in rows}
-    current_cost = {k: _group_expected_cost(v, 1) for k, v in selected.items()}
-
-    for task_id in all_tasks:
-        if task_id not in selected:
-            selected[task_id] = []
-            current_cost[task_id] = 100.0
-
-    while True:
-        scored = []
-        for cand in singles:
-            task_key, task_ids, courier_id, score, willingness, row_index = cand
-            if courier_id in used_couriers:
-                continue
-            old_cost = current_cost.get(task_key, 100.0)
-            new_cost = _group_expected_cost(selected.get(task_key, []), 1, extra=cand)
-            gain = old_cost - new_cost
-            if gain <= 1e-12:
-                continue
-            value = gain
-            if noise:
-                value *= rng.uniform(1.0 - noise, 1.0 + noise)
-            scored.append((value, gain, willingness, -score, -row_index, cand, new_cost))
-        if not scored:
-            break
-        scored.sort(reverse=True)
-        pick = scored[rng.randrange(min(3, len(scored)))]
-        cand = pick[5]
-        new_cost = pick[6]
-        selected.setdefault(cand[0], []).append(cand)
-        current_cost[cand[0]] = new_cost
-        used_couriers.add(cand[2])
-
-    return {k: v for k, v in selected.items() if v}
-
-
-def _random_single_start_solution(singles, all_tasks, deadline, seed=18, max_budget=1.8):
-    if time.monotonic() > deadline - max_budget:
-        return []
-    local_deadline = min(deadline, time.monotonic() + max_budget)
-    selected = _greedy_repair_single({}, singles, all_tasks, random.Random(seed), 0.5)
-    result = _format_selected(selected)
-    result = _reassign_single_solution(result, singles, all_tasks, local_deadline)
-    result = _rebalance_single_solution(result, singles, all_tasks, local_deadline)
-    result = _reassign_single_solution(result, singles, all_tasks, local_deadline)
-    return result
-
-
-def _random_start_low(candidates, all_tasks, singles, deadline, seed):
-    """Diversified random-start construction for low-willingness cases.
-
-    Uses high-noise greedy repair from empty start with a random seed,
-    then quick MCF polish. Different seeds produce structurally different
-    initial solutions that may land in different local-optimum basins.
-    """
-    rng = random.Random(seed)
-    noise = rng.choice([0.3, 0.5, 0.7, 0.9])
-    selected = _greedy_repair_single({}, singles, all_tasks, rng, noise)
-    result = _format_selected(selected)
-    local_deadline = min(deadline, time.monotonic() + 0.25)
-    result = _reassign_single_solution(result, singles, all_tasks, local_deadline)
-    return result
-
-
-def _selected_cost(selected, all_tasks):
-    covered = 0
-    total = 0.0
-    for rows in selected.values():
-        if not rows:
-            continue
-        task_count = len(rows[0][1])
-        covered += task_count
-        total += _group_expected_cost(rows, task_count)
-    total += 100.0 * (len(all_tasks) - covered)
-    return total
-
-
-def _local_improve_mixed_solution(result, candidates, all_tasks, deadline, max_passes=2):
-    row_map = {(c[0], c[2]): c for c in candidates}
-    selected = _result_to_selected(result, row_map)
-    if not selected:
-        return result
-
-    by_key = {}
-    singles_by_task = {}
-    bundles_by_tasks = {}
-    for cand in candidates:
-        by_key.setdefault(cand[0], []).append(cand)
-        if len(cand[1]) == 1:
-            singles_by_task.setdefault(cand[1][0], []).append(cand)
-        elif len(cand[1]) >= 2:
-            bundles_by_tasks.setdefault(tuple(sorted(cand[1])), []).append(cand)
-    has_large_bundle = any(len(task_ids) > 2 for task_ids in bundles_by_tasks)
-
-    best_cost = _selected_cost(selected, all_tasks)
-    passes = 0
-    while passes < max_passes and time.monotonic() < deadline - 0.12:
-        passes += 1
-        changed = False
-
-        improved = _improve_same_key_groups(selected, by_key, all_tasks, deadline)
-        if improved:
-            new_cost = _selected_cost(selected, all_tasks)
-            if new_cost < best_cost - 1e-9:
-                best_cost = new_cost
-                changed = True
-
-        if time.monotonic() < deadline - 0.12:
-            improved = _improve_bundle_splits(selected, singles_by_task, all_tasks, deadline)
-            if improved:
-                new_cost = _selected_cost(selected, all_tasks)
-                if new_cost < best_cost - 1e-9:
-                    best_cost = new_cost
-                    changed = True
-
-        if time.monotonic() < deadline - 0.12:
-            if has_large_bundle:
-                improved = _improve_covered_bundle_merges(selected, bundles_by_tasks, all_tasks, deadline)
-            else:
-                improved = _improve_single_pair_merges(selected, bundles_by_tasks, all_tasks, deadline)
-            if improved:
-                new_cost = _selected_cost(selected, all_tasks)
-                if new_cost < best_cost - 1e-9:
-                    best_cost = new_cost
-                    changed = True
-
-        # Previously dead code: pair rewiring (T1,T2)+(T3,T4) → (T1,T3)+(T2,T4)
-        # and arbitrary-length single→bundle merges. Inner-loop ops can be slow
-        # so they're gated to STRICTLY scarce cases (couriers < tasks) only.
-        # high_noise / equal couriers=tasks must NOT trigger here — observed
-        # +2.24 regression on high_noise_seed601 when gate was <=.
-        scarce_local = len({c[2] for c in candidates}) < len(all_tasks)
-        if scarce_local and time.monotonic() < deadline - 0.12:
-            improved = _improve_pair_rewires(selected, bundles_by_tasks, all_tasks, deadline)
-            if improved:
-                new_cost = _selected_cost(selected, all_tasks)
-                if new_cost < best_cost - 1e-9:
-                    best_cost = new_cost
-                    changed = True
-
-        if scarce_local and time.monotonic() < deadline - 0.12:
-            improved = _improve_single_bundle_merges(selected, bundles_by_tasks, all_tasks, deadline)
-            if improved:
-                new_cost = _selected_cost(selected, all_tasks)
-                if new_cost < best_cost - 1e-9:
-                    best_cost = new_cost
-                    changed = True
-
-        if not changed:
-            break
-
-    # Final polish: MCF-based global courier reassignment over the chosen task
-    # structure. Gate by structural size (NOT raw candidate count): runs on
-    # everything except large cases (40t/80c=expensive). On 712.39 submission
-    # (no gate) high_noise improved -2.24 but large took 9s; this gate keeps
-    # the high_noise win and skips only large.
-    _n_couriers = len({c[2] for c in candidates})
-    _n_tasks = len(all_tasks)
-    should_polish = (_n_tasks <= 30) or (_n_couriers <= 50)
-    if should_polish and time.monotonic() < deadline - 0.18:
-        polished = _format_selected(selected)
-        polished = _reassign_mixed_solution(polished, candidates, all_tasks, deadline)
-        if _solution_expected_cost(polished, candidates, all_tasks) < _solution_expected_cost(_format_selected(selected), candidates, all_tasks) - 1e-9:
-            selected = _result_to_selected(polished, row_map)
-
-    candidate = _format_selected(selected)
-    if _solution_expected_cost(candidate, candidates, all_tasks) < _solution_expected_cost(result, candidates, all_tasks) - 1e-9:
-        return candidate
-    return result
-
-
-def _improve_same_key_groups(selected, by_key, all_tasks, deadline):
-    changed = False
-    for task_key in list(selected):
-        if time.monotonic() > deadline - 0.12:
-            break
-        rows = selected.get(task_key)
-        if not rows:
-            continue
-        outside_couriers = _selected_couriers_except(selected, {task_key})
-        pool = [cand for cand in by_key.get(task_key, []) if cand[2] not in outside_couriers]
-        if not pool:
-            continue
-        limit = min(len(pool), max(1, len(rows) + 2), 7)
-        replacement = _best_group_from_pool(pool, len(rows[0][1]), limit)
-        if not replacement:
-            continue
-        old_cost = _group_expected_cost(rows, len(rows[0][1]))
-        new_cost = _group_expected_cost(replacement, len(replacement[0][1]))
-        if new_cost < old_cost - 1e-9:
-            selected[task_key] = replacement
-            changed = True
-    return changed
-
-
-def _improve_bundle_splits(selected, singles_by_task, all_tasks, deadline):
-    changed = False
-    for task_key in list(selected):
-        if time.monotonic() > deadline - 0.12:
-            break
-        rows = selected.get(task_key)
-        if not rows or len(rows[0][1]) < 2:
-            continue
-        task_ids = rows[0][1]
-        if any(task_id in selected for task_id in task_ids):
-            continue
-        outside_couriers = _selected_couriers_except(selected, {task_key})
-        split = _best_multi_split_groups(
-            task_ids,
-            singles_by_task,
-            outside_couriers,
-            max_rows=min(len(rows) + len(task_ids), max(7, len(task_ids) * 2)),
-        )
-        if split is None:
-            continue
-        old_cost = _group_expected_cost(rows, len(task_ids))
-        new_cost = sum(_group_expected_cost(task_rows, 1) for task_rows in split.values())
-        if new_cost < old_cost - 1e-9:
-            del selected[task_key]
-            for task_id, task_rows in split.items():
-                selected[task_id] = task_rows
-            changed = True
-    return changed
-
-
-def _improve_single_pair_merges(selected, bundles_by_tasks, all_tasks, deadline):
-    changed = False
-    single_keys = [key for key, rows in selected.items() if rows and len(rows[0][1]) == 1]
-    for i, first_key in enumerate(single_keys):
-        if time.monotonic() > deadline - 0.12:
-            break
-        if first_key not in selected:
-            continue
-        for second_key in single_keys[i + 1:]:
-            if time.monotonic() > deadline - 0.12:
-                break
-            if second_key not in selected:
-                continue
-            first_rows = selected[first_key]
-            second_rows = selected[second_key]
-            pair = tuple(sorted((first_rows[0][1][0], second_rows[0][1][0])))
-            pool = bundles_by_tasks.get(pair)
-            if not pool:
-                continue
-            outside_couriers = _selected_couriers_except(selected, {first_key, second_key})
-            available = [cand for cand in pool if cand[2] not in outside_couriers]
-            if not available:
-                continue
-            limit = min(len(available), len(first_rows) + len(second_rows) + 2, 7)
-            replacement = _best_group_from_pool(available, 2, limit)
-            if not replacement:
-                continue
-            old_cost = _group_expected_cost(first_rows, 1) + _group_expected_cost(second_rows, 1)
-            new_cost = _group_expected_cost(replacement, 2)
-            if new_cost < old_cost - 1e-9:
-                del selected[first_key]
-                del selected[second_key]
-                selected[replacement[0][0]] = replacement
-                changed = True
-                break
-    return changed
-
-
-def _improve_covered_bundle_merges(selected, bundles_by_tasks, all_tasks, deadline):
-    changed = False
-    bundle_items = sorted(
-        bundles_by_tasks.items(),
-        key=lambda item: (-len(item[0]), item[0]),
-    )
-    while time.monotonic() < deadline - 0.12:
-        best = None
-        best_delta = 0.0
-        task_owner = {}
-        for task_key, rows in selected.items():
-            if not rows:
-                continue
-            for task_id in rows[0][1]:
-                task_owner[task_id] = task_key
-
-        for bundle_task_ids, pool in bundle_items:
-            if time.monotonic() > deadline - 0.12:
-                break
-            if len(bundle_task_ids) < 2:
-                continue
-            owner_keys = set()
-            missing = False
-            for task_id in bundle_task_ids:
-                owner = task_owner.get(task_id)
-                if owner is None:
-                    missing = True
-                    break
-                owner_keys.add(owner)
-            if missing or len(owner_keys) == 1:
-                continue
-
-            covered_by_owners = set()
-            old_cost = 0.0
-            old_rows = 0
-            for owner in owner_keys:
-                rows = selected.get(owner)
-                if not rows:
-                    continue
-                covered_by_owners.update(rows[0][1])
-                old_cost += _group_expected_cost(rows, len(rows[0][1]))
-                old_rows += len(rows)
-            if covered_by_owners != set(bundle_task_ids):
-                continue
-
-            outside_couriers = _selected_couriers_except(selected, owner_keys)
-            available = [cand for cand in pool if cand[2] not in outside_couriers]
-            if not available:
-                continue
-            limit = min(len(available), max(1, old_rows + 2), max(7, len(bundle_task_ids) + 3))
-            replacement = _best_group_from_pool(available, len(bundle_task_ids), limit)
-            if not replacement:
-                continue
-            new_cost = _group_expected_cost(replacement, len(bundle_task_ids))
-            delta = new_cost - old_cost
-            if delta < best_delta - 1e-9:
-                best_delta = delta
-                best = (owner_keys, replacement)
-
-        if best is None:
-            break
-        owner_keys, replacement = best
-        for owner in owner_keys:
-            if owner in selected:
-                del selected[owner]
-        selected[replacement[0][0]] = replacement
-        changed = True
-    return changed
-
-
-def _improve_single_bundle_merges(selected, bundles_by_tasks, all_tasks, deadline):
-    changed = False
-    bundle_items = sorted(
-        bundles_by_tasks.items(),
-        key=lambda item: (-len(item[0]), item[0]),
-    )
-    for bundle_task_ids, pool in bundle_items:
-        if time.monotonic() > deadline - 0.12:
-            break
-        if len(bundle_task_ids) < 2:
-            continue
-        if any(task_id not in selected for task_id in bundle_task_ids):
-            continue
-        selected_keys = set(bundle_task_ids)
-        if any(len(selected[task_id][0][1]) != 1 for task_id in bundle_task_ids):
-            continue
-        outside_couriers = _selected_couriers_except(selected, selected_keys)
-        available = [cand for cand in pool if cand[2] not in outside_couriers]
-        if not available:
-            continue
-        old_cost = sum(_group_expected_cost(selected[task_id], 1) for task_id in bundle_task_ids)
-        old_rows = sum(len(selected[task_id]) for task_id in bundle_task_ids)
-        limit = min(len(available), max(1, old_rows + 2), max(7, len(bundle_task_ids) + 3))
-        replacement = _best_group_from_pool(available, len(bundle_task_ids), limit)
-        if not replacement:
-            continue
-        new_cost = _group_expected_cost(replacement, len(bundle_task_ids))
-        if new_cost < old_cost - 1e-9:
-            for task_id in bundle_task_ids:
-                del selected[task_id]
-            selected[replacement[0][0]] = replacement
-            changed = True
-    return changed
-
-
-def _improve_pair_rewires(selected, bundles_by_tasks, all_tasks, deadline):
-    pair_keys = [key for key, rows in selected.items() if rows and len(rows[0][1]) == 2]
-    if len(pair_keys) < 2:
-        return False
-
-    changed = False
-    while time.monotonic() < deadline - 0.12:
-        best = None
-        best_delta = 0.0
-        pair_keys = [key for key, rows in selected.items() if rows and len(rows[0][1]) == 2]
-        for i, first_key in enumerate(pair_keys):
-            if time.monotonic() > deadline - 0.12:
-                break
-            if first_key not in selected:
-                continue
-            first_rows = selected[first_key]
-            a, b = first_rows[0][1]
-            for second_key in pair_keys[i + 1:]:
-                if time.monotonic() > deadline - 0.12:
-                    break
-                if second_key not in selected:
-                    continue
-                second_rows = selected[second_key]
-                c, d = second_rows[0][1]
-                if len({a, b, c, d}) < 4:
-                    continue
-                old_cost = _group_expected_cost(first_rows, 2) + _group_expected_cost(second_rows, 2)
-                outside_couriers = _selected_couriers_except(selected, {first_key, second_key})
-                for left_pair, right_pair in (((a, c), (b, d)), ((a, d), (b, c))):
-                    left_key = tuple(sorted(left_pair))
-                    right_key = tuple(sorted(right_pair))
-                    left_pool = [cand for cand in bundles_by_tasks.get(left_key, []) if cand[2] not in outside_couriers]
-                    if not left_pool:
-                        continue
-                    left_rows = _best_group_from_pool(left_pool, 2, min(len(first_rows) + 1, 6))
-                    if not left_rows:
-                        continue
-                    left_couriers = {cand[2] for cand in left_rows}
-                    right_pool = [
-                        cand for cand in bundles_by_tasks.get(right_key, [])
-                        if cand[2] not in outside_couriers and cand[2] not in left_couriers
-                    ]
-                    if not right_pool:
-                        continue
-                    right_rows = _best_group_from_pool(right_pool, 2, min(len(second_rows) + 1, 6))
-                    if not right_rows:
-                        continue
-                    new_cost = _group_expected_cost(left_rows, 2) + _group_expected_cost(right_rows, 2)
-                    delta = new_cost - old_cost
-                    if delta < best_delta - 1e-9:
-                        best_delta = delta
-                        best = (first_key, second_key, left_rows, right_rows)
-        if best is None:
-            break
-        first_key, second_key, left_rows, right_rows = best
-        if first_key in selected:
-            del selected[first_key]
-        if second_key in selected:
-            del selected[second_key]
-        selected[left_rows[0][0]] = left_rows
-        selected[right_rows[0][0]] = right_rows
-        changed = True
-    return changed
-
-
-def _selected_couriers_except(selected, excluded_keys):
-    return {
-        cand[2]
-        for task_key, rows in selected.items()
-        if task_key not in excluded_keys
-        for cand in rows
-    }
-
-
-def _best_group_from_pool(pool, task_count, limit):
-    chosen = []
-    used_couriers = set()
-    current_cost = 100.0 * task_count
-    while len(chosen) < limit:
-        best = None
-        best_cost = 0.0
-        best_delta = 0.0
-        for cand in pool:
-            if cand[2] in used_couriers:
-                continue
-            new_cost = _group_expected_cost(chosen, task_count, extra=cand)
-            delta = new_cost - current_cost
-            if delta < best_delta - 1e-12:
-                best = cand
-                best_cost = new_cost
-                best_delta = delta
-        if best is None:
-            break
-        chosen.append(best)
-        used_couriers.add(best[2])
-        current_cost = best_cost
-    return chosen
-
-
-def _best_multi_split_groups(task_ids, singles_by_task, outside_couriers, max_rows):
-    selected = {task_id: [] for task_id in task_ids}
-    current_cost = {task_id: 100.0 for task_id in task_ids}
-    used_couriers = set(outside_couriers)
-    pool = []
-    for task_id in task_ids:
-        pool.extend(singles_by_task.get(task_id, []))
-    while sum(len(rows) for rows in selected.values()) < max_rows:
-        best = None
-        best_task = None
-        best_cost = 0.0
-        best_delta = 0.0
-        for cand in pool:
-            task_id = cand[1][0]
-            if cand[2] in used_couriers:
-                continue
-            new_cost = _group_expected_cost(selected[task_id], 1, extra=cand)
-            delta = new_cost - current_cost[task_id]
-            if delta < best_delta - 1e-12:
-                best = cand
-                best_task = task_id
-                best_cost = new_cost
-                best_delta = delta
-        if best is None:
-            break
-        selected[best_task].append(best)
-        current_cost[best_task] = best_cost
-        used_couriers.add(best[2])
-    if any(not selected[task_id] for task_id in task_ids):
-        return None
-    return selected
-
-
+	A=selected;B=[]
+	for C in sorted(A,key=lambda k:A[k][0][1]):D=sorted(A[C],key=lambda c:(c[3],-c[4],c[5]));B.append((C,[A[2]for A in D]))
+	return B
+def _result_to_selected(result,row_map):
+	B={}
+	for(C,E)in result:
+		A=[]
+		for F in E:
+			D=row_map.get((C,F))
+			if D is not _A:A.append(D)
+		if A:B[C]=A
+	return B
+def _destroy_repair_single_solution(result,singles,all_tasks,deadline):
+	J=singles;I=result;A=all_tasks;R={(A[0],A[2]):A for A in J};K=_result_to_selected(I,R)
+	if not K:return I
+	B=K;E=random.Random(123);F=0;S=900 if len(A)>=35 else 350;T=100 if len(A)>=35 else 60;G=0
+	while F<S and G<T and time.monotonic()<deadline-.05:
+		F+=1;C=[]
+		for(L,D)in B.items():
+			U=_group_expected_cost(D,1)
+			for H in D:M=[A for A in D if A!=H];V=_group_expected_cost(M,1)if M else 1e2;C.append((V-U,H[5],H))
+		if not C:break
+		C.sort(key=lambda x:(x[0],x[1]));N=[B for(A,A,B)in C[:min(40,len(C))]];W=E.choice([2,3,4,5,6,8]);X=set(E.sample(N,min(W,len(N))));O={}
+		for(L,D)in B.items():
+			P=[A for A in D if A not in X]
+			if P:O[L]=P
+		Y=E.choice([_C,.1,.2,.35]);Q=_greedy_repair_single(O,J,A,random.Random(F),Y)
+		if _selected_cost(Q,A)<_selected_cost(B,A)-1e-09:B=Q;G=0
+		else:G+=1
+	return _format_selected(B)
+def _greedy_repair_single(selected,singles,all_tasks,rng,noise):
+	E=noise;A=selected;A={A:list(B)for(A,B)in A.items()};I={B[2]for A in A.values()for B in A};F={A:_group_expected_cost(B,1)for(A,B)in A.items()}
+	for G in all_tasks:
+		if G not in A:A[G]=[];F[G]=1e2
+	while _B:
+		C=[]
+		for B in singles:
+			J,R,M,N,O,P=B
+			if M in I:continue
+			Q=F.get(J,1e2);D=_group_expected_cost(A.get(J,[]),1,extra=B);H=Q-D
+			if H<=1e-12:continue
+			K=H
+			if E:K*=rng.uniform(_E-E,_E+E)
+			C.append((K,H,O,-N,-P,B,D))
+		if not C:break
+		C.sort(reverse=_B);L=C[rng.randrange(min(3,len(C)))];B=L[5];D=L[6];A.setdefault(B[0],[]).append(B);F[B[0]]=D;I.add(B[2])
+	return{B:A for(B,A)in A.items()if A}
+def _random_single_start_solution(singles,all_tasks,deadline):
+	E=deadline;C=all_tasks;B=singles
+	if time.monotonic()>E-1.8:return[]
+	D=min(E,time.monotonic()+1.8);F=_greedy_repair_single({},B,C,random.Random(18),.5);A=_format_selected(F);A=_reassign_single_solution(A,B,C,D);A=_rebalance_single_solution(A,B,C,D);A=_reassign_single_solution(A,B,C,D);return A
+def _selected_cost(selected,all_tasks):
+	C=0;A=_C
+	for B in selected.values():
+		if not B:continue
+		D=len(B[0][1]);C+=D;A+=_group_expected_cost(B,D)
+	A+=1e2*(len(all_tasks)-C);return A
+def _local_improve_mixed_solution(result,candidates,all_tasks,deadline,include_pair_rewire=_D):
+	K=candidates;J=result;D=deadline;A=all_tasks;P={(A[0],A[2]):A for A in K};B=_result_to_selected(J,P)
+	if not B:return J
+	L={};M={};H={}
+	for E in K:
+		L.setdefault(E[0],[]).append(E)
+		if len(E[1])==1:M.setdefault(E[1][0],[]).append(E)
+		elif len(E[1])>=2:H.setdefault(tuple(sorted(E[1])),[]).append(E)
+	Q=any(len(A)>2 for A in H);F=_selected_cost(B,A);N=0
+	while N<2 and time.monotonic()<D-.12:
+		N+=1;I=_D;G=_improve_same_key_groups(B,L,A,D)
+		if G:
+			C=_selected_cost(B,A)
+			if C<F-1e-09:F=C;I=_B
+		if time.monotonic()<D-.12:
+			G=_improve_bundle_splits(B,M,A,D)
+			if G:
+				C=_selected_cost(B,A)
+				if C<F-1e-09:F=C;I=_B
+		if time.monotonic()<D-.12:
+			if Q:G=_improve_covered_bundle_merges(B,H,A,D)
+			else:G=_improve_single_pair_merges(B,H,A,D)
+			if G:
+				C=_selected_cost(B,A)
+				if C<F-1e-09:F=C;I=_B
+		if include_pair_rewire and time.monotonic()<D-.12:
+			G=_improve_pair_rewires(B,H,A,D)
+			if G:
+				C=_selected_cost(B,A)
+				if C<F-1e-09:F=C;I=_B
+		if not I:break
+	O=_format_selected(B)
+	if _solution_expected_cost(O,K,A)<_solution_expected_cost(J,K,A)-1e-09:return O
+	return J
+def _improve_same_key_groups(selected,by_key,all_tasks,deadline):
+	B=selected;F=_D
+	for C in list(B):
+		if time.monotonic()>deadline-.12:break
+		A=B.get(C)
+		if not A:continue
+		G=_selected_couriers_except(B,{C});E=[A for A in by_key.get(C,[])if A[2]not in G]
+		if not E:continue
+		H=min(len(E),max(1,len(A)+2),7);D=_best_group_from_pool(E,len(A[0][1]),H)
+		if not D:continue
+		I=_group_expected_cost(A,len(A[0][1]));J=_group_expected_cost(D,len(D[0][1]))
+		if J<I-1e-09:B[C]=D;F=_B
+	return F
+def _improve_bundle_splits(selected,singles_by_task,all_tasks,deadline):
+	A=selected;F=_D
+	for D in list(A):
+		if time.monotonic()>deadline-.12:break
+		B=A.get(D)
+		if not B or len(B[0][1])<2:continue
+		C=B[0][1]
+		if any(B in A for B in C):continue
+		G=_selected_couriers_except(A,{D});E=_best_multi_split_groups(C,singles_by_task,G,max_rows=min(len(B)+len(C),max(7,len(C)*2)))
+		if E is _A:continue
+		H=_group_expected_cost(B,len(C));I=sum(_group_expected_cost(A,1)for A in E.values())
+		if I<H-1e-09:
+			del A[D]
+			for(J,K)in E.items():A[J]=K
+			F=_B
+	return F
+def _improve_single_pair_merges(selected,bundles_by_tasks,all_tasks,deadline):
+	H=deadline;A=selected;I=_D;J=[B for(B,A)in A.items()if A and len(A[0][1])==1]
+	for(L,B)in enumerate(J):
+		if time.monotonic()>H-.12:break
+		if B not in A:continue
+		for C in J[L+1:]:
+			if time.monotonic()>H-.12:break
+			if C not in A:continue
+			E=A[B];F=A[C];M=tuple(sorted((E[0][1][0],F[0][1][0])));K=bundles_by_tasks.get(M)
+			if not K:continue
+			N=_selected_couriers_except(A,{B,C});G=[A for A in K if A[2]not in N]
+			if not G:continue
+			O=min(len(G),len(E)+len(F)+2,7);D=_best_group_from_pool(G,2,O)
+			if not D:continue
+			P=_group_expected_cost(E,1)+_group_expected_cost(F,1);Q=_group_expected_cost(D,2)
+			if Q<P-1e-09:del A[B];del A[C];A[D[0][0]]=D;I=_B;break
+	return I
+def _improve_covered_bundle_merges(selected,bundles_by_tasks,all_tasks,deadline):
+	J=deadline;D=selected;K=_D;S=sorted(bundles_by_tasks.items(),key=lambda item:(-len(item[0]),item[0]))
+	while time.monotonic()<J-.12:
+		G=_A;L=_C;M={}
+		for(T,A)in D.items():
+			if not A:continue
+			for H in A[0][1]:M[H]=T
+		for(E,U)in S:
+			if time.monotonic()>J-.12:break
+			if len(E)<2:continue
+			B=set();N=_D
+			for H in E:
+				C=M.get(H)
+				if C is _A:N=_B;break
+				B.add(C)
+			if N or len(B)==1:continue
+			O=set();P=_C;Q=0
+			for C in B:
+				A=D.get(C)
+				if not A:continue
+				O.update(A[0][1]);P+=_group_expected_cost(A,len(A[0][1]));Q+=len(A)
+			if O!=set(E):continue
+			V=_selected_couriers_except(D,B);I=[A for A in U if A[2]not in V]
+			if not I:continue
+			W=min(len(I),max(1,Q+2),max(7,len(E)+3));F=_best_group_from_pool(I,len(E),W)
+			if not F:continue
+			X=_group_expected_cost(F,len(E));R=X-P
+			if R<L-1e-09:L=R;G=B,F
+		if G is _A:break
+		B,F=G
+		for C in B:
+			if C in D:del D[C]
+		D[F[0][0]]=F;K=_B
+	return K
+def _improve_pair_rewires(selected,bundles_by_tasks,all_tasks,deadline):
+	O=bundles_by_tasks;G=deadline;A=selected;F=[B for(B,A)in A.items()if A and len(A[0][1])==2]
+	if len(F)<2:return _D
+	P=_D
+	while time.monotonic()<G-.12:
+		H=_A;Q=_C;F=[B for(B,A)in A.items()if A and len(A[0][1])==2]
+		for(V,B)in enumerate(F):
+			if time.monotonic()>G-.12:break
+			if B not in A:continue
+			I=A[B];J,K=I[0][1]
+			for C in F[V+1:]:
+				if time.monotonic()>G-.12:break
+				if C not in A:continue
+				L=A[C];M,N=L[0][1]
+				if len({J,K,M,N})<4:continue
+				W=_group_expected_cost(I,2)+_group_expected_cost(L,2);R=_selected_couriers_except(A,{B,C})
+				for(X,Y)in(((J,M),(K,N)),((J,N),(K,M))):
+					Z=tuple(sorted(X));a=tuple(sorted(Y));S=[A for A in O.get(Z,[])if A[2]not in R]
+					if not S:continue
+					D=_best_group_from_pool(S,2,min(len(I)+1,6))
+					if not D:continue
+					b={A[2]for A in D};T=[A for A in O.get(a,[])if A[2]not in R and A[2]not in b]
+					if not T:continue
+					E=_best_group_from_pool(T,2,min(len(L)+1,6))
+					if not E:continue
+					c=_group_expected_cost(D,2)+_group_expected_cost(E,2);U=c-W
+					if U<Q-1e-09:Q=U;H=B,C,D,E
+		if H is _A:break
+		B,C,D,E=H
+		if B in A:del A[B]
+		if C in A:del A[C]
+		A[D[0][0]]=D;A[E[0][0]]=E;P=_B
+	return P
+def _selected_couriers_except(selected,excluded_keys):return{C[2]for(A,B)in selected.items()if A not in excluded_keys for C in B}
+def _best_group_from_pool(pool,task_count,limit):
+	D=task_count;A=[];E=set();F=1e2*D
+	while len(A)<limit:
+		B=_A;G=_C;H=_C
+		for C in pool:
+			if C[2]in E:continue
+			I=_group_expected_cost(A,D,extra=C);J=I-F
+			if J<H-1e-12:B=C;G=I;H=J
+		if B is _A:break
+		A.append(B);E.add(B[2]);F=G
+	return A
+def _best_multi_split_groups(task_ids,singles_by_task,outside_couriers,max_rows):
+	C=task_ids;A={A:[]for A in C};G={A:1e2 for A in C};H=set(outside_couriers);I=[]
+	for B in C:I.extend(singles_by_task.get(B,[]))
+	while sum(len(A)for A in A.values())<max_rows:
+		D=_A;F=_A;J=_C;K=_C
+		for E in I:
+			B=E[1][0]
+			if E[2]in H:continue
+			L=_group_expected_cost(A[B],1,extra=E);M=L-G[B]
+			if M<K-1e-12:D=E;F=B;J=L;K=M
+		if D is _A:break
+		A[F].append(D);G[F]=J;H.add(D[2])
+	if any(not A[B]for B in C):return
+	return A
 class _MinCostFlow:
-    def __init__(self, n):
-        self.graph = [[] for _ in range(n)]
-
-    def add_edge(self, start, end, capacity, cost):
-        forward = [end, capacity, cost, len(self.graph[end])]
-        backward = [start, 0, -cost, len(self.graph[start])]
-        self.graph[start].append(forward)
-        self.graph[end].append(backward)
-
-    def min_cost_flow(self, source, sink, amount):
-        sent = 0
-        n = len(self.graph)
-        while sent < amount:
-            dist = [float("inf")] * n
-            in_queue = [False] * n
-            prev_node = [-1] * n
-            prev_edge = [-1] * n
-            dist[source] = 0.0
-            queue = [source]
-            in_queue[source] = True
-            head = 0
-            while head < len(queue):
-                node = queue[head]
-                head += 1
-                in_queue[node] = False
-                for edge_index, edge in enumerate(self.graph[node]):
-                    to_node, capacity, cost, _ = edge
-                    if capacity <= 0:
-                        continue
-                    new_dist = dist[node] + cost
-                    if new_dist + 1e-12 < dist[to_node]:
-                        dist[to_node] = new_dist
-                        prev_node[to_node] = node
-                        prev_edge[to_node] = edge_index
-                        if not in_queue[to_node]:
-                            queue.append(to_node)
-                            in_queue[to_node] = True
-            if prev_node[sink] == -1:
-                break
-            node = sink
-            while node != source:
-                edge = self.graph[prev_node[node]][prev_edge[node]]
-                reverse = self.graph[node][edge[3]]
-                edge[1] -= 1
-                reverse[1] += 1
-                node = prev_node[node]
-            sent += 1
-        return sent
-
-
-def _reassign_single_solution(result, singles, all_tasks, deadline):
-    row_map = {(c[0], c[2]): c for c in singles}
-    selected = _result_to_selected(result, row_map)
-    if not selected:
-        return result
-    best_cost = _selected_cost(selected, all_tasks)
-    for _ in range(3):
-        if time.monotonic() > deadline - 0.15:
-            break
-        candidate = _reassign_selected_once(selected, row_map)
-        candidate_cost = _selected_cost(candidate, all_tasks)
-        if candidate_cost < best_cost - 1e-9:
-            selected = candidate
-            best_cost = candidate_cost
-        else:
-            break
-    return _format_selected(selected)
-
-
-def _rebalance_single_solution(result, singles, all_tasks, deadline):
-    row_map = {(c[0], c[2]): c for c in singles}
-    single_by_task_courier = {(c[1][0], c[2]): c for c in singles}
-    selected = _result_to_selected(result, row_map)
-    if not selected:
-        return result
-
-    for task_id in all_tasks:
-        selected.setdefault(task_id, [])
-
-    move_count = 0
-    max_moves = min(12, len(all_tasks))
-    while move_count < max_moves and time.monotonic() < deadline - 0.2:
-        best = None
-        best_delta = 0.0
-        for from_task, from_rows in selected.items():
-            if len(from_rows) <= 1:
-                continue
-            old_from_cost = _group_expected_cost(from_rows, 1)
-            for old_cand in from_rows:
-                courier_id = old_cand[2]
-                from_after = [cand for cand in from_rows if cand != old_cand]
-                from_delta = _group_expected_cost(from_after, 1) - old_from_cost
-                for to_task, to_rows in selected.items():
-                    if to_task == from_task:
-                        continue
-                    new_cand = single_by_task_courier.get((to_task, courier_id))
-                    if new_cand is None:
-                        continue
-                    old_to_cost = _group_expected_cost(to_rows, 1) if to_rows else 100.0
-                    new_to_cost = _group_expected_cost(to_rows, 1, extra=new_cand)
-                    delta = from_delta + new_to_cost - old_to_cost
-                    if delta < best_delta - 1e-12:
-                        best_delta = delta
-                        best = (from_task, to_task, old_cand, new_cand)
-
-        if best is None:
-            break
-
-        from_task, to_task, old_cand, new_cand = best
-        selected[from_task] = [cand for cand in selected[from_task] if cand != old_cand]
-        selected[to_task].append(new_cand)
-        move_count += 1
-
-    return _format_selected({task_key: rows for task_key, rows in selected.items() if rows})
-
-
-def _reassign_mixed_solution(result, candidates, all_tasks, deadline):
-    row_map = {(c[0], c[2]): c for c in candidates}
-    selected = _result_to_selected(result, row_map)
-    if not selected:
-        return result
-    best_cost = _selected_cost(selected, all_tasks)
-    for _ in range(2):
-        if time.monotonic() > deadline - 0.22:
-            break
-        candidate = _reassign_mixed_selected_once(selected, row_map)
-        candidate_cost = _selected_cost(candidate, all_tasks)
-        if candidate_cost < best_cost - 1e-9:
-            selected = candidate
-            best_cost = candidate_cost
-        else:
-            break
-    return _format_selected(selected)
-
-
-def _reassign_mixed_selected_once(selected, row_map):
-    couriers = sorted({cand[2] for rows in selected.values() for cand in rows})
-    slots = []
-    for task_key in sorted(selected):
-        rows = selected[task_key]
-        task_count = len(rows[0][1])
-        for index, old in enumerate(rows):
-            others = [cand for i, cand in enumerate(rows) if i != index]
-            slots.append((task_key, task_count, others))
-
-    if not couriers or not slots:
-        return selected
-
-    source = 0
-    courier_offset = 1
-    slot_offset = courier_offset + len(couriers)
-    sink = slot_offset + len(slots)
-    flow = _MinCostFlow(sink + 1)
-    edge_map = {}
-
-    for i, courier_id in enumerate(couriers):
-        flow.add_edge(source, courier_offset + i, 1, 0.0)
-    for j in range(len(slots)):
-        flow.add_edge(slot_offset + j, sink, 1, 0.0)
-
-    for i, courier_id in enumerate(couriers):
-        courier_node = courier_offset + i
-        for j, (task_key, task_count, others) in enumerate(slots):
-            if any(cand[2] == courier_id for cand in others):
-                continue
-            cand = row_map.get((task_key, courier_id))
-            if cand is None:
-                continue
-            cost = _group_expected_cost(others + [cand], task_count)
-            edge_index = len(flow.graph[courier_node])
-            flow.add_edge(courier_node, slot_offset + j, 1, cost)
-            edge_map[(courier_node, edge_index)] = (j, cand)
-
-    if flow.min_cost_flow(source, sink, len(slots)) < len(slots):
-        return selected
-
-    new_selected = {task_key: [] for task_key in selected}
-    for (node, edge_index), (slot_index, cand) in edge_map.items():
-        if flow.graph[node][edge_index][1] == 0:
-            task_key = slots[slot_index][0]
-            new_selected[task_key].append(cand)
-
-    if any(len(new_selected.get(k, [])) != len(v) for k, v in selected.items()):
-        return selected
-    return new_selected
-
-
-def _reassign_selected_once(selected, row_map):
-    couriers = sorted({cand[2] for rows in selected.values() for cand in rows})
-    slots = []
-    for task_key in sorted(selected):
-        rows = selected[task_key]
-        for index, old in enumerate(rows):
-            others = [cand for i, cand in enumerate(rows) if i != index]
-            slots.append((task_key, others))
-
-    if not couriers or not slots:
-        return selected
-
-    source = 0
-    courier_offset = 1
-    slot_offset = courier_offset + len(couriers)
-    sink = slot_offset + len(slots)
-    flow = _MinCostFlow(sink + 1)
-    edge_map = {}
-
-    for i, courier_id in enumerate(couriers):
-        flow.add_edge(source, courier_offset + i, 1, 0.0)
-    for j in range(len(slots)):
-        flow.add_edge(slot_offset + j, sink, 1, 0.0)
-
-    for i, courier_id in enumerate(couriers):
-        courier_node = courier_offset + i
-        for j, (task_key, others) in enumerate(slots):
-            if any(cand[2] == courier_id for cand in others):
-                continue
-            cand = row_map.get((task_key, courier_id))
-            if cand is None:
-                continue
-            cost = _group_expected_cost(others + [cand], 1)
-            edge_index = len(flow.graph[courier_node])
-            flow.add_edge(courier_node, slot_offset + j, 1, cost)
-            edge_map[(courier_node, edge_index)] = (j, cand)
-
-    if flow.min_cost_flow(source, sink, len(slots)) < len(slots):
-        return selected
-
-    new_selected = {task_key: [] for task_key in selected}
-    for (node, edge_index), (slot_index, cand) in edge_map.items():
-        if flow.graph[node][edge_index][1] == 0:
-            task_key = slots[slot_index][0]
-            new_selected[task_key].append(cand)
-
-    if any(len(new_selected.get(k, [])) != len(v) for k, v in selected.items()):
-        return selected
-    return new_selected
-
-
-def _solve_sparse_cover(candidates, all_tasks, deadline):
-    best = []
-    for mode in ("cover", "gain", "ratio"):
-        if time.monotonic() > deadline - 0.25:
-            break
-        solution = _sparse_greedy(candidates, mode)
-        if not best or _simple_result_score(solution, candidates, all_tasks) < _simple_result_score(best, candidates, all_tasks):
-            best = solution
-    should_beam = (
-        len(all_tasks) <= 60
-        and len(candidates) <= 60000
-        and len({c[2] for c in candidates}) <= 80
-        and time.monotonic() < deadline - 1.0
-    )
-    if should_beam:
-        beam = _sparse_beam_search(candidates, all_tasks, deadline)
-        if beam and _simple_result_score(beam, candidates, all_tasks) < _simple_result_score(best, candidates, all_tasks):
-            best = beam
-    return best
-
-
-def _sparse_beam_search(candidates, all_tasks, deadline):
-    task_list = sorted(all_tasks)
-    task_index = {task: idx for idx, task in enumerate(task_list)}
-    by_courier = {}
-    for cand in candidates:
-        mask = 0
-        ok = True
-        for task in cand[1]:
-            if task not in task_index:
-                ok = False
-                break
-            mask |= 1 << task_index[task]
-        if not ok:
-            continue
-        cost = _group_expected_cost([cand], len(cand[1]))
-        benefit = 100.0 * len(cand[1]) - cost
-        if benefit <= 1e-12:
-            continue
-        row = (mask, benefit, cost, cand)
-        by_courier.setdefault(cand[2], []).append(row)
-
-    if not by_courier:
-        return []
-
-    small_sparse = len(candidates) <= 10000 and len(by_courier) <= 25
-    per_courier_limit = 45 if small_sparse else 28
-    courier_items = []
-    for courier, rows in by_courier.items():
-        best_by_mask = {}
-        for mask, benefit, cost, cand in rows:
-            old = best_by_mask.get(mask)
-            if old is None or cost < old[2] - 1e-12:
-                best_by_mask[mask] = (mask, benefit, cost, cand)
-        pruned = sorted(best_by_mask.values(), key=lambda r: (_popcount(r[0]), r[1], -r[2]), reverse=True)[:per_courier_limit]
-        courier_items.append((courier, pruned))
-
-    # Process high-impact couriers first to keep the beam compact.
-    courier_items.sort(key=lambda item: max((r[1] for r in item[1]), default=0.0), reverse=True)
-    beam = {0: (0.0, ())}
-    beam_width = 12000 if small_sparse else (900 if len(courier_items) <= 30 else 520)
-    for _, rows in courier_items:
-        if time.monotonic() > deadline - 0.25:
-            break
-        next_beam = dict(beam)
-        for mask, (benefit, path) in beam.items():
-            for cand_mask, cand_benefit, _, cand in rows:
-                if mask & cand_mask:
-                    continue
-                new_mask = mask | cand_mask
-                new_benefit = benefit + cand_benefit
-                old = next_beam.get(new_mask)
-                if old is None or new_benefit > old[0] + 1e-12:
-                    next_beam[new_mask] = (new_benefit, path + (cand,))
-        if len(next_beam) > beam_width:
-            ranked = sorted(
-                next_beam.items(),
-                key=lambda item: (item[1][0], _popcount(item[0])),
-                reverse=True,
-            )[:beam_width]
-            beam = dict(ranked)
-        else:
-            beam = next_beam
-
-    best_mask, (best_benefit, best_path) = max(
-        beam.items(),
-        key=lambda item: (item[1][0], _popcount(item[0])),
-    )
-    return [(cand[0], [cand[2]]) for cand in best_path]
-
-
+	def __init__(A,n):A.graph=[[]for A in range(n)]
+	def add_edge(A,start,end,capacity,cost):C=end;B=start;D=[C,capacity,cost,len(A.graph[C])];E=[B,0,-cost,len(A.graph[B])];A.graph[B].append(D);A.graph[C].append(E)
+	def min_cost_flow(C,source,sink,amount):
+		D=source;J=0;E=len(C.graph)
+		while J<amount:
+			F=[float(_F)]*E;G=[_D]*E;H=[-1]*E;M=[-1]*E;F[D]=_C;K=[D];G[D]=_B;L=0
+			while L<len(K):
+				A=K[L];L+=1;G[A]=_D
+				for(O,I)in enumerate(C.graph[A]):
+					B,P,Q,S=I
+					if P<=0:continue
+					N=F[A]+Q
+					if N+1e-12<F[B]:
+						F[B]=N;H[B]=A;M[B]=O
+						if not G[B]:K.append(B);G[B]=_B
+			if H[sink]==-1:break
+			A=sink
+			while A!=D:I=C.graph[H[A]][M[A]];R=C.graph[A][I[3]];I[1]-=1;R[1]+=1;A=H[A]
+			J+=1
+		return J
+def _reassign_single_solution(result,singles,all_tasks,deadline):
+	C=all_tasks;B=result;D={(A[0],A[2]):A for A in singles};A=_result_to_selected(B,D)
+	if not A:return B
+	E=_selected_cost(A,C)
+	for H in range(3):
+		if time.monotonic()>deadline-.15:break
+		F=_reassign_selected_once(A,D);G=_selected_cost(F,C)
+		if G<E-1e-09:A=F;E=G
+		else:break
+	return _format_selected(A)
+def _rebalance_single_solution(result,singles,all_tasks,deadline):
+	K=all_tasks;J=singles;I=result;O={(A[0],A[2]):A for A in J};P={(A[1][0],A[2]):A for A in J};A=_result_to_selected(I,O)
+	if not A:return I
+	for Q in K:A.setdefault(Q,[])
+	L=0;R=min(12,len(K))
+	while L<R and time.monotonic()<deadline-.2:
+		G=_A;M=_C
+		for(B,F)in A.items():
+			if len(F)<=1:continue
+			S=_group_expected_cost(F,1)
+			for C in F:
+				T=C[2];U=[A for A in F if A!=C];V=_group_expected_cost(U,1)-S
+				for(D,H)in A.items():
+					if D==B:continue
+					E=P.get((D,T))
+					if E is _A:continue
+					W=_group_expected_cost(H,1)if H else 1e2;X=_group_expected_cost(H,1,extra=E);N=V+X-W
+					if N<M-1e-12:M=N;G=B,D,C,E
+		if G is _A:break
+		B,D,C,E=G;A[B]=[A for A in A[B]if A!=C];A[D].append(E);L+=1
+	return _format_selected({B:A for(B,A)in A.items()if A})
+def _reassign_mixed_solution(result,candidates,all_tasks,deadline):
+	C=all_tasks;B=result;D={(A[0],A[2]):A for A in candidates};A=_result_to_selected(B,D)
+	if not A:return B
+	E=_selected_cost(A,C)
+	for H in range(2):
+		if time.monotonic()>deadline-.22:break
+		F=_reassign_mixed_selected_once(A,D);G=_selected_cost(F,C)
+		if G<E-1e-09:A=F;E=G
+		else:break
+	return _format_selected(A)
+def _reassign_mixed_selected_once(selected,row_map):
+	A=selected;F=sorted({B[2]for A in A.values()for B in A});B=[]
+	for C in sorted(A):
+		I=A[C];J=len(I[0][1])
+		for(U,Y)in enumerate(I):G=[B for(A,B)in enumerate(I)if A!=U];B.append((C,J,G))
+	if not F or not B:return A
+	S=0;K=1;L=K+len(F);M=L+len(B);D=_MinCostFlow(M+1);T={}
+	for(N,O)in enumerate(F):D.add_edge(S,K+N,1,_C)
+	for H in range(len(B)):D.add_edge(L+H,M,1,_C)
+	for(N,O)in enumerate(F):
+		P=K+N
+		for(H,(C,J,G))in enumerate(B):
+			if any(A[2]==O for A in G):continue
+			E=row_map.get((C,O))
+			if E is _A:continue
+			V=_group_expected_cost(G+[E],J);Q=len(D.graph[P]);D.add_edge(P,L+H,1,V);T[P,Q]=H,E
+	if D.min_cost_flow(S,M,len(B))<len(B):return A
+	R={A:[]for A in A}
+	for((W,Q),(X,E))in T.items():
+		if D.graph[W][Q][1]==0:C=B[X][0];R[C].append(E)
+	if any(len(R.get(A,[]))!=len(B)for(A,B)in A.items()):return A
+	return R
+def _reassign_selected_once(selected,row_map):
+	A=selected;F=sorted({B[2]for A in A.values()for B in A});B=[]
+	for C in sorted(A):
+		Q=A[C]
+		for(T,X)in enumerate(Q):G=[B for(A,B)in enumerate(Q)if A!=T];B.append((C,G))
+	if not F or not B:return A
+	R=0;I=1;J=I+len(F);K=J+len(B);D=_MinCostFlow(K+1);S={}
+	for(L,M)in enumerate(F):D.add_edge(R,I+L,1,_C)
+	for H in range(len(B)):D.add_edge(J+H,K,1,_C)
+	for(L,M)in enumerate(F):
+		N=I+L
+		for(H,(C,G))in enumerate(B):
+			if any(A[2]==M for A in G):continue
+			E=row_map.get((C,M))
+			if E is _A:continue
+			U=_group_expected_cost(G+[E],1);O=len(D.graph[N]);D.add_edge(N,J+H,1,U);S[N,O]=H,E
+	if D.min_cost_flow(R,K,len(B))<len(B):return A
+	P={A:[]for A in A}
+	for((V,O),(W,E))in S.items():
+		if D.graph[V][O][1]==0:C=B[W][0];P[C].append(E)
+	if any(len(P.get(A,[]))!=len(B)for(A,B)in A.items()):return A
+	return P
+def _solve_scarce_bundle_mcf_enum(candidates,all_tasks,deadline):
+	N=deadline;H=all_tasks;G=candidates;I=sorted(H);R={B:A for(A,B)in enumerate(I)};J={};C=[]
+	for D in _canonical_candidates(G):
+		b,E,K,c,d,e=D
+		if len(E)==1:J.setdefault(E[0],[]).append(D);continue
+		A=0
+		for S in E:
+			if S not in R:A=0;break
+			A|=1<<R[S]
+		if not A:continue
+		F=_group_expected_cost([D],len(E));T=1e2*len(E)-F
+		if T<=1e-09:continue
+		C.append((T,F,A,K,D))
+	if not C:return[]
+	C.sort(key=lambda item:(_popcount(item[2]),item[0]/max(item[1],1e-09),item[0],-item[1],-item[4][5]),reverse=_B);C=C[:120];O=[(0,frozenset(),())];U=list(O);L=_complete_scarce_bundles_with_mcf((),J,I);V=_solution_expected_cost(L,G,H)if L else float(_F);a=min(len({A[2]for A in G}),len(H)//2+2)
+	for W in range(a):
+		if time.monotonic()>N-.28:break
+		B=[]
+		for(A,M,P)in O:
+			for(W,W,X,K,D)in C:
+				if A&X or K in M:continue
+				B.append((A|X,M|{K},P+(D,)))
+				if len(B)>=1800:break
+			if len(B)>=1800 or time.monotonic()>N-.28:break
+		if not B:break
+		B=_prune_scarce_bundle_states(B,I,J,max_states=180);U.extend(B);O=B
+	Y=set()
+	for(A,M,P)in U:
+		if time.monotonic()>N-.05:break
+		Z=A,tuple(sorted(M))
+		if Z in Y:continue
+		Y.add(Z);Q=_complete_scarce_bundles_with_mcf(P,J,I)
+		if not Q:continue
+		F=_solution_expected_cost(Q,G,H)
+		if F<V-1e-09:L=Q;V=F
+	return L
+def _solve_scarce_bundle_group_mcf_enum(candidates,all_tasks,deadline):
+	M=candidates;H=deadline;G=all_tasks;I=sorted(G);U={B:A for(A,B)in enumerate(I)};J={};V={}
+	for E in _canonical_candidates(M):
+		if len(E[1])==1:J.setdefault(E[1][0],[]).append(E)
+		else:V.setdefault(E[0],[]).append(E)
+	D=[]
+	for A in V.values():
+		if time.monotonic()>H-.2:break
+		C=0;W=_B
+		for X in A[0][1]:
+			if X not in U:W=_D;break
+			C|=1<<U[X]
+		if not W:continue
+		N=len(A[0][1]);A=sorted(A,key=lambda c:(_group_expected_cost([c],N),-c[4],c[5]))[:7];O=[]
+		for g in range(1,min(3,len(A))+1):
+			for P in itertools.combinations(A,g):
+				Q=tuple(sorted(A[2]for A in P))
+				if len(Q)!=len(set(Q)):continue
+				F=_group_expected_cost(P,N);Y=1e2*N-F
+				if Y<=1e-09:continue
+				O.append((Y,F,C,frozenset(Q),tuple(P)))
+		O.sort(key=lambda item:(item[0]/max(item[1],1e-09),item[0],-item[1]),reverse=_B);D.extend(O[:3])
+	if not D:return[]
+	D.sort(key=lambda item:(_popcount(item[2]),item[0]/max(1,len(item[3])),item[0]/max(item[1],1e-09),item[0]),reverse=_B);D=D[:90];R=[(0,frozenset(),())];Z=list(R);K=_complete_scarce_bundle_groups_with_mcf((),J,I);a=_solution_expected_cost(K,M,G)if K else float(_F);h=min(len(G)//2+2,18)
+	for b in range(h):
+		if time.monotonic()>H-.22:break
+		B=[]
+		for(C,L,S)in R:
+			for(b,b,c,d,A)in D:
+				if C&c or L&d:continue
+				B.append((C|c,L|d,S+(A,)))
+				if len(B)>=1300:break
+			if len(B)>=1300 or time.monotonic()>H-.22:break
+		if not B:break
+		B=_prune_scarce_bundle_group_states(B,I,J,max_states=120);Z.extend(B);R=B
+	e=set()
+	for(C,L,S)in Z:
+		if time.monotonic()>H-.05:break
+		f=C,tuple(sorted(L))
+		if f in e:continue
+		e.add(f);T=_complete_scarce_bundle_groups_with_mcf(S,J,I)
+		if not T:continue
+		F=_solution_expected_cost(T,M,G)
+		if F<a-1e-09:K=T;a=F
+	return K
+def _prune_scarce_bundle_group_states(states,task_list,singles_by_task,max_states):
+	B=task_list;A=states;G={B:A for(A,B)in enumerate(B)}
+	def C(state):
+		C,D,H=state;I=sum(_group_expected_cost(A,len(A[0][1]))for A in H);A=_C
+		for E in B:
+			if C>>G[E]&1:continue
+			F=[A for A in singles_by_task.get(E,[])if A[2]not in D]
+			if F:A+=min(_group_expected_cost([A],1)for A in F)
+			else:A+=1e2
+		return I+A,-_popcount(C),len(D)
+	A.sort(key=C);return A[:max_states]
+def _complete_scarce_bundle_groups_with_mcf(bundle_groups,singles_by_task,task_list):
+	N=singles_by_task;H=bundle_groups;S={B for A in H for B in A[0][1]};O={B[2]for A in H for B in A};B=[A for A in task_list if A not in S];D=[(A[0][0],[A[2]for A in A])for A in H]
+	if not B:return D
+	I=sorted({A[2]for B in B for A in N.get(B,[])if A[2]not in O});P=0;E=1;J=E+len(B);F=J+len(I);C=_MinCostFlow(F+1);Q={}
+	for G in range(len(B)):C.add_edge(P,E+G,1,_C);C.add_edge(E+G,F,1,1e2)
+	for T in range(len(I)):C.add_edge(J+T,F,1,_C)
+	U={B:A for(A,B)in enumerate(I)}
+	for(G,V)in enumerate(B):
+		K=E+G;L={}
+		for A in N.get(V,[]):
+			if A[2]in O:continue
+			R=L.get(A[2])
+			if R is _A or _group_expected_cost([A],1)<_group_expected_cost([R],1)-1e-12:L[A[2]]=A
+		for(W,A)in L.items():X=J+U[W];M=len(C.graph[K]);C.add_edge(K,X,1,_group_expected_cost([A],1));Q[K,M]=A
+	if C.min_cost_flow(P,F,len(B))<len(B):return D
+	for((Y,M),A)in Q.items():
+		if C.graph[Y][M][1]==0:D.append((A[0],[A[2]]))
+	return D
+def _prune_scarce_bundle_states(states,task_list,singles_by_task,max_states):
+	B=task_list;A=states;H={B:A for(A,B)in enumerate(B)}
+	def C(state):
+		C,D,E=state;I=sum(_group_expected_cost([A],len(A[1]))for A in E);A=_C
+		for F in B:
+			if C>>H[F]&1:continue
+			G=[A for A in singles_by_task.get(F,[])if A[2]not in D]
+			if G:A+=min(_group_expected_cost([A],1)for A in G)
+			else:A+=1e2
+		return I+A,-_popcount(C),len(D),tuple(A[0]for A in E)
+	A.sort(key=C);return A[:max_states]
+def _complete_scarce_bundles_with_mcf(bundle_rows,singles_by_task,task_list):
+	N=singles_by_task;H=bundle_rows;S={B for A in H for B in A[1]};O={A[2]for A in H};B=[A for A in task_list if A not in S];D=[(A[0],[A[2]])for A in H]
+	if not B:return D
+	I=sorted({A[2]for B in B for A in N.get(B,[])if A[2]not in O});P=0;E=1;J=E+len(B);F=J+len(I);C=_MinCostFlow(F+1);Q={}
+	for G in range(len(B)):C.add_edge(P,E+G,1,_C);C.add_edge(E+G,F,1,1e2)
+	for T in range(len(I)):C.add_edge(J+T,F,1,_C)
+	U={B:A for(A,B)in enumerate(I)}
+	for(G,V)in enumerate(B):
+		K=E+G;L={}
+		for A in N.get(V,[]):
+			if A[2]in O:continue
+			R=L.get(A[2])
+			if R is _A or _group_expected_cost([A],1)<_group_expected_cost([R],1)-1e-12:L[A[2]]=A
+		for(W,A)in L.items():X=J+U[W];M=len(C.graph[K]);C.add_edge(K,X,1,_group_expected_cost([A],1));Q[K,M]=A
+	if C.min_cost_flow(P,F,len(B))<len(B):return D
+	for((Y,M),A)in Q.items():
+		if C.graph[Y][M][1]==0:D.append((A[0],[A[2]]))
+	return D
+def _solve_sparse_cover(candidates,all_tasks,deadline):
+	D=deadline;B=all_tasks;A=candidates;C=[]
+	for G in(_H,_G,_I):
+		if time.monotonic()>D-.25:break
+		F=_sparse_greedy(A,G)
+		if not C or _simple_result_score(F,A,B)<_simple_result_score(C,A,B):C=F
+	H=len(B)<=60 and len(A)<=60000 and len({A[2]for A in A})<=80 and time.monotonic()<D-_E
+	if H:
+		E=_sparse_beam_search(A,B,D)
+		if E and _simple_result_score(E,A,B)<_simple_result_score(C,A,B):C=E
+	return C
+def _sparse_beam_search(candidates,all_tasks,deadline,coverage_first=_D):
+	N=coverage_first;M=candidates;X=sorted(all_tasks);O={B:A for(A,B)in enumerate(X)};H={}
+	for A in M:
+		B=0;P=_B
+		for Q in A[1]:
+			if Q not in O:P=_D;break
+			B|=1<<O[Q]
+		if not P:continue
+		F=_group_expected_cost([A],len(A[1]));C=1e2*len(A[1])-F
+		if C<=1e-12:continue
+		Y=B,C,F,A;H.setdefault(A[2],[]).append(Y)
+	if not H:return[]
+	R=len(M)<=10000 and len(H)<=25;Z=45 if R else 28;I=[]
+	for(a,J)in H.items():
+		K={}
+		for(B,C,F,A)in J:
+			G=K.get(B)
+			if G is _A or F<G[2]-1e-12:K[B]=B,C,F,A
+		b=sorted(K.values(),key=lambda r:(_popcount(r[0]),r[1],-r[2]),reverse=_B)[:Z];I.append((a,b))
+	I.sort(key=lambda item:max((A[1]for A in item[1]),default=_C),reverse=_B);D={0:(_C,())};L=12000 if R else 900 if len(I)<=30 else 520
+	for(c,J)in I:
+		if time.monotonic()>deadline-.25:break
+		E=dict(D)
+		for(B,(C,d))in D.items():
+			for(S,e,c,A)in J:
+				if B&S:continue
+				T=B|S;U=C+e;G=E.get(T)
+				if G is _A or U>G[0]+1e-12:E[T]=U,d+(A,)
+		if len(E)>L:
+			if N:V=sorted(E.items(),key=lambda item:(_popcount(item[0]),item[1][0]),reverse=_B)[:L]
+			else:V=sorted(E.items(),key=lambda item:(item[1][0],_popcount(item[0])),reverse=_B)[:L]
+			D=dict(V)
+		else:D=E
+	if N:f,(g,W)=max(D.items(),key=lambda item:(_popcount(item[0]),item[1][0]))
+	else:f,(g,W)=max(D.items(),key=lambda item:(item[1][0],_popcount(item[0])))
+	return[(A[0],[A[2]])for A in W]
 def _popcount(value):
-    return bin(value).count("1")
-
-
-def _sparse_greedy(candidates, mode):
-    used_tasks = set()
-    used_couriers = set()
-    result = []
-    while True:
-        best = None
-        best_key = None
-        for cand in candidates:
-            task_key, task_ids, courier_id, score, willingness, row_index = cand
-            if courier_id in used_couriers:
-                continue
-            new_tasks = [task for task in task_ids if task not in used_tasks]
-            if len(new_tasks) != len(task_ids):
-                continue
-            task_count = len(task_ids)
-            gain = 100.0 * task_count - _group_expected_cost([cand], task_count)
-            if gain <= 1e-12:
-                continue
-            if mode == "cover":
-                key = (task_count, gain / max(score, 1e-9), gain, willingness, -score)
-            elif mode == "gain":
-                key = (gain, task_count, gain / max(score, 1e-9), willingness, -score)
-            else:
-                key = (gain / max(score, 1e-9), task_count, gain, willingness, -score)
-            if best_key is None or key > best_key:
-                best_key = key
-                best = cand
-        if best is None:
-            break
-        result.append((best[0], [best[2]]))
-        used_couriers.add(best[2])
-        for task in best[1]:
-            used_tasks.add(task)
-    return result
-
-
-def _simple_result_score(result, candidates, all_tasks):
-    return _solution_expected_cost(result, candidates, all_tasks)
-
-
-def _randomized_greedy_bundles(candidates, all_tasks, deadline, seed, max_time=0.4):
-    """Randomized greedy construction that considers both singles and bundles.
-
-    Different from the deterministic disjoint/pair solvers: noise is added to
-    the greedy score, producing structurally different solutions each run.
-    Multiple restarts with different seeds explore diverse basins.
-    """
-    by_key = {}
-    for c in candidates:
-        by_key.setdefault(c[0], []).append(c)
-
-    # Precompute best K=1 cost per task_key
-    group_options = []
-    for key, pool in by_key.items():
-        task_ids = pool[0][1]
-        tc = len(task_ids)
-        best_k1_cost = _group_expected_cost([min(pool, key=lambda c: _group_expected_cost([c], tc))], tc)
-        # Expected gain from covering these tasks with best courier
-        gain = 100.0 * tc - best_k1_cost
-        if gain > 1e-9:
-            group_options.append((gain, tc, key, task_ids, pool))
-    group_options.sort(reverse=True, key=lambda x: x[0])
-
-    rng = random.Random(seed)
-    noise_level = rng.uniform(0.2, 0.8)
-
-    selected = {}
-    used_tasks = set()
-    used_couriers = set()
-    task_list = list(all_tasks)
-
-    local_deadline = min(deadline, time.monotonic() + max_time)
-
-    while time.monotonic() < local_deadline - 0.05:
-        scored = []
-        for gain, tc, key, task_ids, pool in group_options:
-            if key in selected:
-                continue
-            if any(t in used_tasks for t in task_ids):
-                continue
-            avail = [c for c in pool if c[2] not in used_couriers]
-            if not avail:
-                continue
-            best = min(avail, key=lambda c: _group_expected_cost([c], tc))
-            cost = _group_expected_cost([best], tc)
-            # Score = gain with noise
-            score = (100.0 * tc - cost) * rng.uniform(1.0 - noise_level, 1.0 + noise_level)
-            scored.append((score, key, best, tc, task_ids))
-
-        if not scored:
-            break
-
-        scored.sort(reverse=True)
-        # Pick from top 3 randomly
-        pick_idx = rng.randrange(min(3, len(scored)))
-        _, key, best, tc, task_ids = scored[pick_idx]
-
-        selected[key] = [best]
-        used_couriers.add(best[2])
-        for t in task_ids:
-            used_tasks.add(t)
-
-    # Fill remaining uncovered tasks with singles
-    singles_by_task = {}
-    for c in candidates:
-        if len(c[1]) == 1:
-            singles_by_task.setdefault(c[1][0], []).append(c)
-
-    for t in task_list:
-        if t in used_tasks:
-            continue
-        pool = singles_by_task.get(t, [])
-        avail = [c for c in pool if c[2] not in used_couriers]
-        if not avail:
-            continue
-        best = min(avail, key=lambda c: _group_expected_cost([c], 1))
-        selected[best[0]] = [best]
-        used_couriers.add(best[2])
-        used_tasks.add(t)
-
-    result = _format_selected(selected)
-    # MCF polish
-    if time.monotonic() < local_deadline - 0.1:
-        result = _reassign_mixed_solution(result, candidates, all_tasks, local_deadline)
-    return result
-
-
-def _solution_expected_cost(result, candidates, all_tasks):
-    row_map = {(c[0], c[2]): c for c in candidates}
-    used_tasks = set()
-    used_couriers = set()
-    total = 0.0
-    for task_key, courier_ids in result:
-        rows = []
-        for courier_id in courier_ids:
-            cand = row_map.get((task_key, courier_id))
-            if cand is None or courier_id in used_couriers:
-                return float("inf")
-            used_couriers.add(courier_id)
-            rows.append(cand)
-        if not rows:
-            return float("inf")
-        for task_id in rows[0][1]:
-            if task_id in used_tasks:
-                return float("inf")
-            used_tasks.add(task_id)
-        total += _group_expected_cost(rows, len(rows[0][1]))
-    total += 100.0 * (len(all_tasks) - len(used_tasks))
-    return total
-
-
-def _pick_robust_best(solutions, candidates, all_tasks):
-    """Pick the solution with the best worst-case cost across scoring models.
-
-    For low-willingness cases, the platform's true scoring model is unknown.
-    Evaluating each candidate under multiple plausible models (avg-subset,
-    min-score-accepter, weighted) and picking the one with minimum WORST-CASE
-    cost produces a solution that is robust to model misspecification.
-    """
-    valid = [s for s in solutions if s]
-    if not valid:
-        return []
-    if len(valid) == 1:
-        return valid[0]
-
-    best_sol = valid[0]
-    best_worst = float("inf")
-
-    for sol in valid:
-        # Cost under avg-subset (primary model)
-        c1 = _solution_cost_under_model(sol, candidates, all_tasks, "avg-subset")
-        # Cost under min-score-accepter
-        c2 = _solution_cost_under_model(sol, candidates, all_tasks, "min-score-accepter")
-        # Worst-case across the two best models (RMSE 42-47 range)
-        worst = max(c1, c2)
-        if worst < best_worst - 1e-9:
-            best_worst = worst
-            best_sol = sol
-
-    return best_sol
-
-
-def _solution_cost_under_model(result, candidates, all_tasks, model):
-    """Evaluate a solution under a specific scoring model."""
-    row_map = {(c[0], c[2]): c for c in candidates}
-    used_tasks = set()
-    used_couriers = set()
-    total = 0.0
-    for task_key, courier_ids in result:
-        rows = []
-        for courier_id in courier_ids:
-            cand = row_map.get((task_key, courier_id))
-            if cand is None or courier_id in used_couriers:
-                return float("inf")
-            used_couriers.add(courier_id)
-            rows.append(cand)
-        if not rows:
-            return float("inf")
-        for task_id in rows[0][1]:
-            if task_id in used_tasks:
-                return float("inf")
-            used_tasks.add(task_id)
-        total += _group_cost_by_model(rows, len(rows[0][1]), model)
-    total += 100.0 * (len(all_tasks) - len(used_tasks))
-    return total
-
-
+	A=value;B=0
+	while A:B+=_POPCOUNT_TABLE[A&255];A>>=8
+	return B
+def _sparse_greedy(candidates,mode):
+	J=set();K=set();L=[]
+	while _B:
+		B=_A;F=_A
+		for G in candidates:
+			P,H,M,C,I,Q=G
+			if M in K:continue
+			N=[A for A in H if A not in J]
+			if len(N)!=len(H):continue
+			D=len(H);A=1e2*D-_group_expected_cost([G],D)
+			if A<=1e-12:continue
+			if mode==_H:E=D,A/max(C,1e-09),A,I,-C
+			elif mode==_G:E=A,D,A/max(C,1e-09),I,-C
+			else:E=A/max(C,1e-09),D,A,I,-C
+			if F is _A or E>F:F=E;B=G
+		if B is _A:break
+		L.append((B[0],[B[2]]));K.add(B[2])
+		for O in B[1]:J.add(O)
+	return L
+def _simple_result_score(result,candidates,all_tasks):return _solution_expected_cost(result,candidates,all_tasks)
+def _pick_low_robust_best(solutions,candidates,all_tasks):
+	B=all_tasks;A=candidates;D=[A for A in solutions if A]
+	if not D:return[]
+	E=min(D,key=lambda s:_solution_expected_cost(s,A,B));C=_solution_expected_cost(E,A,B)
+	def G(solution):E=solution;D=_solution_expected_cost(E,A,B);F=_solution_expected_cost_by_model(E,A,B,_L);G=_solution_expected_cost_by_model(E,A,B,_M);H=.45*D+.45*F+.1*G;I=max(D-C,F-C,G-C);return H+.15*max(_C,I),max(D,F,G),D
+	F=min(D,key=G);H=_solution_expected_cost(F,A,B)
+	if H<=C+25.:return F
+	return E
+def _pick_hard_scarce_best(solutions,candidates,all_tasks):
+	C=all_tasks;B=candidates;A=[A for A in solutions if A]
+	if not A:return[]
+	D=sorted(A,key=lambda s:_solution_expected_cost(s,B,C))[:4];E=[]
+	for A in D:
+		E.append(A);F=_drop_riskiest_groups(A,B,1)
+		if F:E.append(F)
+		G=_drop_riskiest_groups(A,B,2)
+		if G:E.append(G)
+	return min(E,key=lambda s:(_hard_scarce_shadow_cost(s,B,C),_solution_expected_cost(s,B,C)))
+def _pick_scarce_best(solutions,candidates,all_tasks):
+	A=[A for A in solutions if A]
+	if not A:return[]
+	return min(A,key=lambda s:_solution_expected_cost(s,candidates,all_tasks))
+def _drop_riskiest_groups(result,candidates,drop_groups):
+	E=drop_groups;D=candidates;C=result
+	if E<=0 or len(C)<=E:return C
+	F={(A[0],A[2]):A for A in D};B=[]
+	for(G,H)in enumerate(C):
+		J,I=H;A=[F.get((J,A))for A in I];A=[A for A in A if A is not _A]
+		if not A:continue
+		K=len(A[0][1]);L=_group_expected_cost(A,K);B.append((L-1e2*K,L/max(1,K),G))
+	M={A for(B,C,A)in sorted(B,reverse=_B)[:E]};return[B for(A,B)in enumerate(C)if A not in M]
+def _hard_scarce_shadow_cost(result,candidates,all_tasks):
+	I=all_tasks;H=candidates;G=result;K={(A[0],A[2]):A for A in H};B=set();E=set();C=_C;L=0;M=0;N=0
+	for(J,O)in G:
+		A=[]
+		for D in O:
+			F=K.get((J,D))
+			if F is _A or D in E:return float(_F)
+			E.add(D);A.append(F)
+		if not A:return float(_F)
+		for P in A[0][1]:
+			if P in B:return float(_F)
+			B.add(P)
+		C+=_group_expected_cost(A,len(A[0][1]));L+=max(_C,len(A)-2);M+=len(A);N+=len(A[0][1])>=2
+	return C+60.*(len(I)-len(B))+14.*L+N+M/5.
+def _drop_unprofitable_groups(result,candidates,all_tasks):
+	E=all_tasks;C=candidates;B=result;I={(A[0],A[2]):A for A in C};D=[]
+	for(F,G)in B:
+		A=[I.get((F,A))for A in G];A=[A for A in A if A is not _A]
+		if not A:continue
+		H=len(A[0][1])
+		if _group_expected_cost(A,H)<1e2*H-1e-09:D.append((F,list(G)))
+	if _solution_expected_cost(D,C,E)<_solution_expected_cost(B,C,E)-1e-09:return D
+	return B
+def _solution_covered_count(result,candidates):
+	G={(A[0],A[2]):A for A in candidates};A=set();D=set()
+	for(H,I)in result:
+		B=[]
+		for C in I:
+			E=G.get((H,C))
+			if E is _A or C in D:return-1
+			D.add(C);B.append(E)
+		if not B:return-1
+		for F in B[0][1]:
+			if F in A:return-1
+			A.add(F)
+	return len(A)
+def _group_expected_cost_by_model(rows,task_count,model):
+	F=task_count;B=model;A=rows
+	if B=='avg_subset':return _group_expected_cost(A,F)
+	C=_E;D=_C
+	if B==_L:G=sorted(A,key=lambda c:(c[3],-c[4],c[5]))
+	elif B==_M:G=sorted(A,key=lambda c:(-c[4],c[3],c[5]))
+	else:raise ValueError('unknown cost model')
+	for E in G:D+=C*E[4]*E[3];C*=_E-E[4]
+	D+=C*1e2*F;return D
+def _solution_expected_cost_by_model(result,candidates,all_tasks,model):
+	H={(A[0],A[2]):A for A in candidates};B=set();E=set();C=_C
+	for(I,J)in result:
+		A=[]
+		for D in J:
+			F=H.get((I,D))
+			if F is _A or D in E:return float(_F)
+			E.add(D);A.append(F)
+		if not A:return float(_F)
+		for G in A[0][1]:
+			if G in B:return float(_F)
+			B.add(G)
+		C+=_group_expected_cost_by_model(A,len(A[0][1]),model)
+	C+=1e2*(len(all_tasks)-len(B));return C
+def _solution_expected_cost(result,candidates,all_tasks):
+	H={(A[0],A[2]):A for A in candidates};B=set();E=set();C=_C
+	for(I,J)in result:
+		A=[]
+		for D in J:
+			F=H.get((I,D))
+			if F is _A or D in E:return float(_F)
+			E.add(D);A.append(F)
+		if not A:return float(_F)
+		for G in A[0][1]:
+			if G in B:return float(_F)
+			B.add(G)
+		C+=_group_expected_cost(A,len(A[0][1]))
+	C+=1e2*(len(all_tasks)-len(B));return C
 def _fallback_official_greedy(candidates):
-    ordered = sorted(candidates, key=lambda c: c[3])
-    assigned_couriers = set()
-    assigned_tasks = set()
-    result = []
-    for task_key, task_ids, courier_id, score, willingness, row_index in ordered:
-        if courier_id in assigned_couriers:
-            continue
-        if any(task_id in assigned_tasks for task_id in task_ids):
-            continue
-        assigned_couriers.add(courier_id)
-        for task_id in task_ids:
-            assigned_tasks.add(task_id)
-        result.append((task_key, [courier_id]))
-    return result
-
-
-# ============================================================================
-# COVERAGE-FIRST GREEDY for scarce cases.
-# When couriers <= tasks, the default bundle modes (gain/ratio/cover) may not
-# explicitly trade "use a bundle to free a courier for an uncovered task" via
-# net-of-penalty marginal value. This solver does it directly: pick the bundle
-# whose marginal (cost − penalty saved) per uncovered task is best, repeat,
-# then fill remaining tasks with cheapest singles.
-# ============================================================================
-
-def _solve_scarce_coverage_first(candidates, all_tasks, deadline):
-    bundles = [c for c in candidates if len(c[1]) >= 2]
-    singles_by_task = {}
-    for c in candidates:
-        if len(c[1]) == 1:
-            singles_by_task.setdefault(c[1][0], []).append(c)
-    if not bundles and not singles_by_task:
-        return None
-
-    used_couriers = set()
-    used_tasks = set()
-    selected = []
-    n_total = len(all_tasks)
-
-    while time.monotonic() < deadline - 0.2:
-        best = None
-        best_score = 0.0  # we want the most-negative net_cost
-        for c in bundles:
-            if c[2] in used_couriers:
-                continue
-            uncov = [t for t in c[1] if t not in used_tasks]
-            if not uncov:
-                continue
-            n = len(c[1])
-            cost = c[4] * c[3] + (1.0 - c[4]) * 100.0 * n
-            # Penalty already implicitly being saved if these tasks remain uncovered
-            penalty_saved = 100.0 * len(uncov)
-            # Estimate alternative single cost for these uncov tasks (they could be
-            # covered by singles instead). Use median single cost as comparison.
-            single_alt = 0.0
-            for t in uncov:
-                pool = singles_by_task.get(t, [])
-                avail = [s for s in pool if s[2] not in used_couriers]
-                if avail:
-                    single_alt += min(s[4] * s[3] + (1.0 - s[4]) * 100.0 for s in avail)
-                else:
-                    single_alt += 100.0  # forced reject
-            # bundle wins if its cost is less than what singles would cost for these tasks
-            net_advantage = single_alt - cost
-            if net_advantage > best_score:
-                best_score = net_advantage
-                best = c
-        if best is None or best_score <= 0:
-            break
-        selected.append((best[0], [best[2]]))
-        used_couriers.add(best[2])
-        used_tasks.update(best[1])
-
-    # Phase 2: fill remaining tasks with cheapest available singles
-    for task_id in sorted(all_tasks):
-        if task_id in used_tasks:
-            continue
-        pool = singles_by_task.get(task_id, [])
-        avail = [c for c in pool if c[2] not in used_couriers]
-        if not avail:
-            continue
-        best = min(avail, key=lambda c: c[4] * c[3] + (1.0 - c[4]) * 100.0)
-        selected.append((best[0], [best[2]]))
-        used_couriers.add(best[2])
-        used_tasks.add(task_id)
-
-    return selected if selected else None
-
-
-# ============================================================================
-# SCARCE BUNDLE ENUMERATION — dedicated solver for couriers < tasks cases.
-# When couriers are fewer than tasks, bundles are REQUIRED to reach 100% cover.
-# This solver enumerates promising 2-task bundles, tries non-overlapping
-# combinations, and fills remaining tasks with singles. MCF post-reassign
-# optimizes courier-to-slot matching.
-# ============================================================================
-
-def _solve_scarce_bundle_enum(candidates, all_tasks, deadline):
-    """Enumerate 2-task bundles for scarce cases (couriers < tasks).
-
-    Returns a solution that may achieve higher coverage than single-only,
-    or None if bundles can't improve over the single-only baseline.
-    """
-    singles_by_task = {}
-    bundles_by_pair = {}
-    for c in candidates:
-        if len(c[1]) == 1:
-            singles_by_task.setdefault(c[1][0], []).append(c)
-        elif len(c[1]) == 2:
-            pair = tuple(sorted(c[1]))
-            bundles_by_pair.setdefault(pair, []).append(c)
-
-    task_list = sorted(all_tasks)
-    courier_count = len({c[2] for c in candidates})
-    needed_bundles = max(1, len(task_list) - courier_count)
-
-    if not bundles_by_pair:
-        return None
-
-    # Best single-courier cost per task (used as baseline for savings)
-    best_single = {}
-    for t in task_list:
-        pool = singles_by_task.get(t, [])
-        if pool:
-            best_single[t] = min(_group_expected_cost([c], 1) for c in pool)
-        else:
-            best_single[t] = 100.0
-
-    # Score each bundle: savings = single_cost(t1)+single_cost(t2) - bundle_cost
-    bundle_entries = []
-    for (t1, t2), pool in bundles_by_pair.items():
-        bundle_cost = min(_group_expected_cost([c], 2) for c in pool)
-        single_sum = best_single.get(t1, 100.0) + best_single.get(t2, 100.0)
-        savings = single_sum - bundle_cost
-        if savings > 1e-9:
-            bundle_entries.append((savings, t1, t2, pool))
-
-    if not bundle_entries:
-        return None
-
-    bundle_entries.sort(reverse=True, key=lambda x: x[0])
-    top_bundles = bundle_entries[:min(80, len(bundle_entries))]
-
-    best_solution = None
-    best_cost = float("inf")
-
-    # Try 1, 2, 3, ... up to needed_bundles+2 bundles
-    max_try = min(needed_bundles + 3, len(top_bundles), len(task_list) // 2)
-    for num_bundles in range(needed_bundles, max_try + 1):
-        if time.monotonic() > deadline - 0.45:
-            break
-
-        # Generate non-overlapping bundle combinations via backtracking
-        combos = _pick_nonoverlapping_bundles(top_bundles, num_bundles, deadline)
-
-        for combo in combos:
-            if time.monotonic() > deadline - 0.35:
-                break
-
-            used_tasks = set()
-            solution = []
-            used_couriers = set()
-
-            for _, t1, t2, pool in combo:
-                used_tasks.update([t1, t2])
-                best_c = min(pool, key=lambda c: _group_expected_cost([c], 2))
-                solution.append((best_c[0], [best_c[2]]))
-                used_couriers.add(best_c[2])
-
-            # Fill remaining tasks with cheapest available singles
-            uncovered = [t for t in task_list if t not in used_tasks]
-            for t in uncovered:
-                pool = singles_by_task.get(t, [])
-                avail = [c for c in pool if c[2] not in used_couriers]
-                if not avail:
-                    break
-                best_c = min(avail, key=lambda c: _group_expected_cost([c], 1))
-                solution.append((best_c[0], [best_c[2]]))
-                used_couriers.add(best_c[2])
-
-            cost = _solution_expected_cost(solution, candidates, all_tasks)
-            if cost < best_cost - 1e-9:
-                best_cost = cost
-                best_solution = solution
-
-    if best_solution is None:
-        return None
-
-    # MCF polish: reassign couriers optimally across the chosen task groups
-    if time.monotonic() < deadline - 0.25:
-        best_solution = _reassign_mixed_solution(
-            best_solution, candidates, all_tasks, deadline)
-
-    return best_solution
-
-
-def _pick_nonoverlapping_bundles(bundle_entries, count, deadline):
-    """Backtrack to find up to `limit` non-overlapping bundle combinations."""
-    limit = 300 if count <= 2 else 120
-    results = []
-
-    def backtrack(start, picked, used_tasks):
-        if len(results) >= limit or time.monotonic() > deadline - 0.3:
-            return
-        if len(picked) == count:
-            results.append(list(picked))
-            return
-        for i in range(start, len(bundle_entries)):
-            _, t1, t2, _ = bundle_entries[i]
-            if t1 in used_tasks or t2 in used_tasks:
-                continue
-            used_tasks.add(t1)
-            used_tasks.add(t2)
-            picked.append(bundle_entries[i])
-            backtrack(i + 1, picked, used_tasks)
-            picked.pop()
-            used_tasks.discard(t1)
-            used_tasks.discard(t2)
-
-    backtrack(0, [], set())
-    return results
-
-
-# ============================================================================
-# STRUCTURAL SIMULATED ANNEALING for low-willingness branch.
-# Unlike the old SA which only perturbed courier assignments within a fixed
-# task grouping, this version also changes the TASK GROUPING via merge/split/
-# re-bundle moves. This lets it escape the structural local optimum that all
-# deterministic solvers converge to.
-# ============================================================================
-
-def _sa_solution_cost(solution, row_map, total_task_count):
-    used_tasks = set()
-    used_couriers = set()
-    total = 0.0
-    for tk, courier_ids in solution:
-        rows = []
-        for cid in courier_ids:
-            cand = row_map.get((tk, cid))
-            if cand is None or cid in used_couriers:
-                return float("inf")
-            used_couriers.add(cid)
-            rows.append(cand)
-        if not rows:
-            continue
-        for tid in rows[0][1]:
-            if tid in used_tasks:
-                return float("inf")
-            used_tasks.add(tid)
-        total += _group_expected_cost(rows, len(rows[0][1]))
-    total += 100.0 * (total_task_count - len(used_tasks))
-    return total
-
-
-def _solve_low_sa(base_solution, candidates, all_tasks, deadline):
-    if not base_solution:
-        return base_solution
-    row_map = {(c[0], c[2]): c for c in candidates}
-
-    # Build fast lookup structures for structural moves
-    singles_by_task = {}
-    bundles_by_pair = {}  # (t1, t2) sorted → [candidates]
-    for c in candidates:
-        if len(c[1]) == 1:
-            singles_by_task.setdefault(c[1][0], []).append(c)
-        elif len(c[1]) == 2:
-            pair = tuple(sorted(c[1]))
-            bundles_by_pair.setdefault(pair, []).append(c)
-
-    # Maps task_key → task_ids
-    task_ids_by_key = {}
-    for c in candidates:
-        task_ids_by_key.setdefault(c[0], c[1])
-
-    current = [(tk, list(cs)) for tk, cs in base_solution]
-    used = set()
-    for tk, cs in current:
-        used.update(cs)
-    n_tasks = len(all_tasks)
-    current_cost = _sa_solution_cost(current, row_map, n_tasks)
-    best = [(tk, list(cs)) for tk, cs in current]
-    best_cost = current_cost
-    if not math.isfinite(current_cost):
-        return base_solution
-
-    rng = random.Random(11)
-    T = 50.0
-    iterations = 0
-    while time.monotonic() < deadline - 0.05 and iterations < 20000:
-        iterations += 1
-        op = rng.random()
-
-        if not current:
-            break
-
-        new_current = [(tk, list(cs)) for tk, cs in current]
-        new_used = set(used)
-        success = False
-
-        # ---- structural moves (40%) ----
-        if op < 0.20:  # Merge: two single-task groups → one bundle
-            single_indices = [
-                i for i, (tk, cs) in enumerate(new_current)
-                if cs and len(task_ids_by_key.get(tk, ())) == 1
-            ]
-            if len(single_indices) >= 2:
-                i1, i2 = rng.sample(single_indices, 2)
-                tk1, cs1 = new_current[i1]
-                tk2, cs2 = new_current[i2]
-                t1 = task_ids_by_key[tk1][0]
-                t2 = task_ids_by_key[tk2][0]
-                bundle_key = ",".join(sorted([t1, t2]))
-                bundle_pool = bundles_by_pair.get((t1, t2) if t1 < t2 else (t2, t1), [])
-                if bundle_pool:
-                    # Pick the best courier for the bundle who isn't already used
-                    avail = [c for c in bundle_pool if c[2] not in new_used]
-                    if avail:
-                        best_bundle = min(avail, key=lambda c: _group_expected_cost([c], 2))
-                        old_cost = (_group_expected_cost(cs1, 1) + _group_expected_cost(cs2, 1))
-                        new_cost = _group_expected_cost([best_bundle], 2)
-                        if new_cost < old_cost + 20.0:  # accept even slightly worse to explore
-                            # Remove i2 first (larger index), then i1
-                            for i in sorted([i1, i2], reverse=True):
-                                new_current.pop(i)
-                            new_current.append((best_bundle[0], [best_bundle[2]]))
-                            new_used.difference_update(c[2] for c in cs1 + cs2)
-                            new_used.add(best_bundle[2])
-                            success = True
-
-        elif op < 0.35:  # Split: one bundle → two single-task groups
-            bundle_indices = [
-                i for i, (tk, cs) in enumerate(new_current)
-                if cs and len(task_ids_by_key.get(tk, ())) == 2
-            ]
-            if bundle_indices:
-                idx = rng.choice(bundle_indices)
-                tk, cs = new_current[idx]
-                t1, t2 = task_ids_by_key[tk]
-                # Find best singles for each task
-                s1_pool = [c for c in singles_by_task.get(t1, []) if c[2] not in new_used]
-                s2_pool = [c for c in singles_by_task.get(t2, []) if c[2] not in new_used]
-                if s1_pool and s2_pool:
-                    best_s1 = min(s1_pool, key=lambda c: _group_expected_cost([c], 1))
-                    best_s2 = min(s2_pool, key=lambda c: _group_expected_cost([c], 1))
-                    if best_s1[2] != best_s2[2]:  # must be different couriers
-                        old_cost = _group_expected_cost(cs, 2)
-                        new_cost = (_group_expected_cost([best_s1], 1) +
-                                    _group_expected_cost([best_s2], 1))
-                        if new_cost < old_cost + 20.0:
-                            new_current.pop(idx)
-                            new_current.append((best_s1[0], [best_s1[2]]))
-                            new_current.append((best_s2[0], [best_s2[2]]))
-                            new_used.difference_update(c[2] for c in cs)
-                            new_used.update([best_s1[2], best_s2[2]])
-                            success = True
-
-        elif op < 0.45:  # Re-bundle: (T1,T2)+(T3,T4) → (T1,T3)+(T2,T4)
-            pair_indices = [
-                i for i, (tk, cs) in enumerate(new_current)
-                if cs and len(task_ids_by_key.get(tk, ())) == 2
-            ]
-            if len(pair_indices) >= 2:
-                i1, i2 = rng.sample(pair_indices, 2)
-                tk1, cs1 = new_current[i1]
-                tk2, cs2 = new_current[i2]
-                a, b = task_ids_by_key[tk1]
-                c, d = task_ids_by_key[tk2]
-                if len({a, b, c, d}) == 4:
-                    old_cost = _group_expected_cost(cs1, 2) + _group_expected_cost(cs2, 2)
-                    # Try both rewirings
-                    for left, right in (((a, c), (b, d)), ((a, d), (b, c))):
-                        lk = tuple(sorted(left))
-                        rk = tuple(sorted(right))
-                        lp = bundles_by_pair.get(lk, [])
-                        rp = bundles_by_pair.get(rk, [])
-                        if not lp or not rp:
-                            continue
-                        bl = min(lp, key=lambda c: _group_expected_cost([c], 2))
-                        br_cands = [c for c in rp if c[2] != bl[2]]
-                        if not br_cands:
-                            continue
-                        br = min(br_cands, key=lambda c: _group_expected_cost([c], 2))
-                        new_cost = _group_expected_cost([bl], 2) + _group_expected_cost([br], 2)
-                        if new_cost < old_cost + 15.0:
-                            for i in sorted([i1, i2], reverse=True):
-                                new_current.pop(i)
-                            new_current.append((bl[0], [bl[2]]))
-                            new_current.append((br[0], [br[2]]))
-                            new_used.difference_update(
-                                c[2] for c in cs1 + cs2)
-                            new_used.update([bl[2], br[2]])
-                            success = True
-                            break
-
-        # ---- courier-level moves (60%) ----
-        elif op < 0.72:  # swap courier on single-task group
-            indices = [i for i, (tk, cs) in enumerate(new_current)
-                       if cs and len(task_ids_by_key.get(tk, ())) == 1]
-            if indices:
-                idx = rng.choice(indices)
-                tk, cs = new_current[idx]
-                ci = rng.randrange(len(cs))
-                old_c = cs[ci]
-                task_id = task_ids_by_key[tk][0]
-                pool = singles_by_task.get(task_id, [])
-                unused = [c for c in pool if c[2] not in new_used and c[2] != old_c]
-                if unused:
-                    new_c = rng.choice(unused)[2]
-                    cs[ci] = new_c
-                    new_used.discard(old_c)
-                    new_used.add(new_c)
-                    success = True
-
-        elif op < 0.88:  # add/remove courier (change K)
-            if rng.random() < 0.5:  # add
-                indices = [i for i, (tk, cs) in enumerate(new_current)
-                           if 0 < len(cs) < 3]
-                if indices:
-                    idx = rng.choice(indices)
-                    tk, cs = new_current[idx]
-                    tids = task_ids_by_key.get(tk, ())
-                    pool = []
-                    for tid in tids:
-                        pool.extend(singles_by_task.get(tid, []))
-                    unused = [c for c in pool if c[2] not in new_used]
-                    if unused:
-                        new_c = rng.choice(unused)[2]
-                        cs.append(new_c)
-                        new_used.add(new_c)
-                        success = True
-            else:  # remove
-                indices = [i for i, (_, cs) in enumerate(new_current) if len(cs) >= 2]
-                if indices:
-                    idx = rng.choice(indices)
-                    _, cs = new_current[idx]
-                    ci = rng.randrange(len(cs))
-                    removed = cs.pop(ci)
-                    new_used.discard(removed)
-                    success = True
-
-        else:  # cross-swap couriers between two groups
-            if len(new_current) >= 2:
-                i1, i2 = rng.sample(range(len(new_current)), 2)
-                tk1, cs1 = new_current[i1]
-                tk2, cs2 = new_current[i2]
-                if cs1 and cs2:
-                    ci1 = rng.randrange(len(cs1))
-                    ci2 = rng.randrange(len(cs2))
-                    j1, j2 = cs1[ci1], cs2[ci2]
-                    if (tk2, j1) in row_map and (tk1, j2) in row_map:
-                        cs1[ci1] = j2
-                        cs2[ci2] = j1
-                        success = True
-
-        if not success:
-            continue
-
-        new_cost = _sa_solution_cost(new_current, row_map, n_tasks)
-        delta = new_cost - current_cost
-        if delta < 0 or (math.isfinite(delta) and rng.random() < math.exp(-delta / max(T, 0.01))):
-            current = new_current
-            current_cost = new_cost
-            used = new_used
-            if current_cost < best_cost - 1e-9:
-                best = [(tk, list(cs)) for tk, cs in current]
-                best_cost = current_cost
-        T *= 0.9995
-
-    return [(tk, cs) for tk, cs in best if cs]
-
-
-# ============================================================================
-# LOW-WILLINGNESS DEDICATED SOLVER — Two-stage Min-Cost Flow.
-# Stage 1: K=1 optimal assignment over 30 tasks × all couriers (Hungarian-via-MCF).
-# Stage 2: K=2 augmentation: each task may pick a second courier or skip,
-#          ΔE evaluated under avg-subset model (validated by PROBE experiments).
-# ============================================================================
-
-def _two_courier_avg_subset(c1, c2):
-    s1, w1 = c1[3], c1[4]
-    s2, w2 = c2[3], c2[4]
-    return ((1.0 - w1) * (1.0 - w2) * 100.0
-            + w1 * (1.0 - w2) * s1
-            + (1.0 - w1) * w2 * s2
-            + w1 * w2 * (s1 + s2) / 2.0)
-
-
-def _two_courier_msa(c1, c2):
-    """Min-score-accepter variant: lowest-score rider wins if they accept."""
-    if c1[3] <= c2[3]:
-        lo_s, lo_w = c1[3], c1[4]
-        hi_s, hi_w = c2[3], c2[4]
-    else:
-        lo_s, lo_w = c2[3], c2[4]
-        hi_s, hi_w = c1[3], c1[4]
-    return (lo_w * lo_s
-            + (1.0 - lo_w) * hi_w * hi_s
-            + (1.0 - lo_w) * (1.0 - hi_w) * 100.0)
-
-
-def _solve_low_mcf(candidates, all_tasks, deadline):
-    singles_by_task = {}
-    for c in candidates:
-        if len(c[1]) == 1:
-            singles_by_task.setdefault(c[1][0], []).append(c)
-    if not all(t in singles_by_task and singles_by_task[t] for t in all_tasks):
-        return None
-
-    tasks = sorted(all_tasks)
-    all_couriers = sorted({c[2] for cs in singles_by_task.values() for c in cs})
-    n_tasks = len(tasks)
-    n_couriers = len(all_couriers)
-    if n_couriers < n_tasks:
-        return None  # cannot K=1 cover all tasks
-    courier_to_idx = {j: i for i, j in enumerate(all_couriers)}
-
-    cand_by_tj = {}
-    for t in tasks:
-        for c in singles_by_task[t]:
-            cand_by_tj[(t, c[2])] = c
-
-    # ---------- Stage 1: K=1 min-cost assignment ----------
-    SRC = 0
-    TASK_OFF = 1
-    CRR_OFF = 1 + n_tasks
-    SINK = CRR_OFF + n_couriers
-    n_nodes = SINK + 1
-    mcf = _MinCostFlow(n_nodes)
-    for i in range(n_tasks):
-        mcf.add_edge(SRC, TASK_OFF + i, 1, 0.0)
-    for j in range(n_couriers):
-        mcf.add_edge(CRR_OFF + j, SINK, 1, 0.0)
-    for i, t in enumerate(tasks):
-        for c in singles_by_task[t]:
-            j_idx = courier_to_idx[c[2]]
-            cost = c[4] * c[3] + (1.0 - c[4]) * 100.0
-            mcf.add_edge(TASK_OFF + i, CRR_OFF + j_idx, 1, cost)
-    sent = mcf.min_cost_flow(SRC, SINK, n_tasks)
-    if sent < n_tasks:
-        return None
-
-    # Extract assignment: task → courier from saturated edges out of TASK_OFF+i
-    top1 = {}
-    for i, t in enumerate(tasks):
-        chosen = None
-        for edge in mcf.graph[TASK_OFF + i]:
-            to_node, capacity, cost, _ = edge
-            if CRR_OFF <= to_node < CRR_OFF + n_couriers and capacity == 0 and cost >= 0:
-                chosen = all_couriers[to_node - CRR_OFF]
-                break
-        if chosen is None:
-            return None
-        top1[t] = chosen
-
-    used = set(top1.values())
-    if time.monotonic() > deadline - 0.35:
-        return _build_low_mcf_result(top1, cand_by_tj, all_tasks, slot2={})
-
-    # ---------- Stage 2: K=2 augmentation with optional skip ----------
-    remaining = [j for j in all_couriers if j not in used]
-    if not remaining:
-        return _build_low_mcf_result(top1, cand_by_tj, all_tasks, slot2={})
-
-    rcrr_to_idx = {j: i for i, j in enumerate(remaining)}
-    n_rem = len(remaining)
-    SRC2 = 0
-    T2_OFF = 1
-    R_OFF = 1 + n_tasks
-    SINK2 = R_OFF + n_rem
-    n_nodes2 = SINK2 + 1
-    mcf2 = _MinCostFlow(n_nodes2)
-    for i in range(n_tasks):
-        mcf2.add_edge(SRC2, T2_OFF + i, 1, 0.0)
-    for j in range(n_rem):
-        mcf2.add_edge(R_OFF + j, SINK2, 1, 0.0)
-    # ΔE edges (task slot2 → courier_j) and skip edges (task slot2 → sink, cost 0)
-    e1_by_task = {t: cand_by_tj[(t, top1[t])][4] * cand_by_tj[(t, top1[t])][3]
-                     + (1.0 - cand_by_tj[(t, top1[t])][4]) * 100.0
-                  for t in tasks}
-    for i, t in enumerate(tasks):
-        c1 = cand_by_tj[(t, top1[t])]
-        # Skip option: send to sink at cost 0 (= no improvement, no second courier)
-        mcf2.add_edge(T2_OFF + i, SINK2, 1, 0.0)
-        for j in remaining:
-            c2 = cand_by_tj.get((t, j))
-            if c2 is None:
-                continue
-            e2 = _two_courier_msa(c1, c2) if _LOW_USE_MSA else _two_courier_avg_subset(c1, c2)
-            delta = e2 - e1_by_task[t]
-            # MCF supports negative cost via SPFA; we want negative deltas to be selected.
-            mcf2.add_edge(T2_OFF + i, R_OFF + rcrr_to_idx[j], 1, delta)
-    mcf2.min_cost_flow(SRC2, SINK2, n_tasks)
-
-    slot2 = {}
-    for i, t in enumerate(tasks):
-        for edge in mcf2.graph[T2_OFF + i]:
-            to_node, capacity, cost, _ = edge
-            if R_OFF <= to_node < R_OFF + n_rem and capacity == 0:
-                slot2[t] = remaining[to_node - R_OFF]
-                break
-
-    return _build_low_mcf_result(top1, cand_by_tj, all_tasks, slot2=slot2)
-
-
-def _build_low_mcf_result(top1, cand_by_tj, all_tasks, slot2=None):
-    slot2 = slot2 or {}
-    result = []
-    for t in sorted(all_tasks):
-        j1 = top1.get(t)
-        if j1 is None:
-            continue
-        c1 = cand_by_tj[(t, j1)]
-        couriers = [j1]
-        if t in slot2:
-            couriers.append(slot2[t])
-        result.append((c1[0], couriers))
-    return result
-
-
-# ============================================================================
-# PROBE STRATEGIES — appended block, only invoked when PROBE_MODE is set.
-# Each probe is a deterministic rule that produces a clean assignment using
-# ONLY single-task rows. The goal is to use platform feedback on these probes
-# to back out which scoring model the judge uses on low-willingness cases.
-# ============================================================================
-
-def _probe_singles_by_task(candidates):
-    by_task = {}
-    for c in candidates:
-        if len(c[1]) == 1:
-            by_task.setdefault(c[1][0], []).append(c)
-    return by_task
-
-
-def _probe_assign(by_task, all_tasks, k, key_fn, filter_fn=None, skip_tasks=None):
-    used_couriers = set()
-    skip_tasks = skip_tasks or set()
-    result = []
-    for task_id in sorted(all_tasks):
-        if task_id in skip_tasks:
-            continue
-        pool = by_task.get(task_id, [])
-        filtered = [c for c in pool if filter_fn(c)] if filter_fn else list(pool)
-        filtered.sort(key=key_fn)
-        picked = []
-        for c in filtered:
-            if c[2] in used_couriers:
-                continue
-            picked.append(c)
-            if len(picked) >= k:
-                break
-        if not picked:  # filter wiped everything → fallback to highest willingness
-            for c in sorted(pool, key=lambda x: -x[4]):
-                if c[2] not in used_couriers:
-                    picked.append(c)
-                    break
-        # Top-up: if filter under-counted, add extra unfiltered free couriers up to k
-        if 0 < len(picked) < k:
-            picked_set = {c[2] for c in picked}
-            for c in sorted(pool, key=lambda x: -x[4]):
-                if c[2] in used_couriers or c[2] in picked_set:
-                    continue
-                picked.append(c)
-                picked_set.add(c[2])
-                if len(picked) >= k:
-                    break
-        for c in picked:
-            used_couriers.add(c[2])
-        if picked:
-            task_key = picked[0][0]
-            result.append((task_key, [c[2] for c in picked]))
-    return result
-
-
-def _probe_d_max_w_plus_min_s(by_task, all_tasks):
-    used = set()
-    result = []
-    for task_id in sorted(all_tasks):
-        pool = by_task.get(task_id, [])
-        if not pool:
-            continue
-        pool_sorted_w = sorted(pool, key=lambda c: -c[4])
-        first = next((c for c in pool_sorted_w if c[2] not in used), None)
-        if first is None:
-            continue
-        used.add(first[2])
-        # Second courier: the lowest-score unused courier (no willingness gate)
-        remainder = [c for c in pool if c[2] not in used]
-        remainder.sort(key=lambda c: c[3])
-        second = remainder[0] if remainder else None
-        picked = [first] + ([second] if second else [])
-        if second:
-            used.add(second[2])
-        result.append((picked[0][0], [c[2] for c in picked]))
-    return result
-
-
-def _probe_f_reject_5_then_k2(by_task, all_tasks):
-    task_max_w = {}
-    for t in all_tasks:
-        pool = by_task.get(t, [])
-        task_max_w[t] = max((c[4] for c in pool), default=0.0)
-    skip = set(sorted(all_tasks, key=lambda t: task_max_w[t])[:5])
-    return _probe_assign(by_task, all_tasks, k=2, key_fn=lambda c: -c[4], skip_tasks=skip)
-
-
-def _run_probe(mode, candidates, all_tasks):
-    by_task = _probe_singles_by_task(candidates)
-    if mode == "A":
-        return _probe_assign(by_task, all_tasks, k=1, key_fn=lambda c: -c[4])
-    if mode == "B":
-        return _probe_assign(by_task, all_tasks, k=1, key_fn=lambda c: c[3])
-    if mode == "C":
-        return _probe_assign(by_task, all_tasks, k=2, key_fn=lambda c: -c[4])
-    if mode == "D":
-        return _probe_d_max_w_plus_min_s(by_task, all_tasks)
-    if mode == "E":
-        return _probe_assign(by_task, all_tasks, k=3, key_fn=lambda c: -c[4])
-    if mode == "F":
-        return _probe_f_reject_5_then_k2(by_task, all_tasks)
-    return _probe_assign(by_task, all_tasks, k=1, key_fn=lambda c: -c[4])
-
-
-# ============================================================================
-# SCARCE PROBE STRATEGIES — for scarce_seed401 (40 tasks, ~38 couriers).
-# Each probe uses a different bundle/reject strategy. Platform scores on these
-# probes let us back out how the judge scores bundles vs singles in scarce cases.
-# ============================================================================
-
-def _run_scarce_probe(mode, candidates, all_tasks):
-    """Scarce probes: test bundle scoring, reject penalties, multi-dispatch."""
-    singles_by_task = {}
-    bundles_by_pair = {}
-    for c in candidates:
-        if len(c[1]) == 1:
-            singles_by_task.setdefault(c[1][0], []).append(c)
-        elif len(c[1]) == 2:
-            pair = tuple(sorted(c[1]))
-            bundles_by_pair.setdefault(pair, []).append(c)
-
-    tasks = sorted(all_tasks)
-    courier_count = len({c[2] for c in candidates})
-
-    if mode == "G":
-        # K=1 singles only, reject the 2 tasks with worst single cost
-        return _scarce_probe_singles_reject(singles_by_task, tasks, reject=2)
-    if mode == "H":
-        # 1 best bundle + singles for remaining, 1 reject
-        return _scarce_probe_n_bundles(singles_by_task, bundles_by_pair, tasks, n_bundles=1)
-    if mode == "I":
-        # 2 best bundles + singles, 100% coverage
-        return _scarce_probe_n_bundles(singles_by_task, bundles_by_pair, tasks, n_bundles=2)
-    if mode == "J":
-        # 3 best bundles + singles, 100% coverage
-        return _scarce_probe_n_bundles(singles_by_task, bundles_by_pair, tasks, n_bundles=3)
-    if mode == "K":
-        # K=2 multi-dispatch on the cheapest tasks, reject 2
-        return _scarce_probe_multidispatch(singles_by_task, tasks, courier_count)
-    return _scarce_probe_singles_reject(singles_by_task, tasks, reject=2)
-
-
-def _scarce_probe_singles_reject(singles_by_task, tasks, reject):
-    """Cover all but `reject` tasks with K=1 singles, reject the worst."""
-    task_costs = []
-    for t in tasks:
-        pool = singles_by_task.get(t, [])
-        if pool:
-            best = min(pool, key=lambda c: _group_expected_cost([c], 1))
-            task_costs.append((_group_expected_cost([best], 1), t, best))
-        else:
-            task_costs.append((100.0, t, None))
-    task_costs.sort(reverse=True)
-    rejected = {t for _, t, _ in task_costs[:reject]}
-
-    used = set()
-    result = []
-    for _, t, best in task_costs:
-        if t in rejected or best is None:
-            continue
-        if best[2] in used:
-            # Pick another unused courier for this task
-            alt = [c for c in singles_by_task.get(t, []) if c[2] not in used]
-            if not alt:
-                continue
-            best = min(alt, key=lambda c: _group_expected_cost([c], 1))
-        result.append((best[0], [best[2]]))
-        used.add(best[2])
-    return result
-
-
-def _scarce_probe_n_bundles(singles_by_task, bundles_by_pair, tasks, n_bundles):
-    """Select n non-overlapping bundles greedily, fill rest with singles."""
-    # Score each bundle
-    bundle_scores = []
-    for (t1, t2), pool in bundles_by_pair.items():
-        best = min(pool, key=lambda c: _group_expected_cost([c], 2))
-        s1 = min(_group_expected_cost([c], 1) for c in singles_by_task.get(t1, [])) if t1 in singles_by_task else 100.0
-        s2 = min(_group_expected_cost([c], 1) for c in singles_by_task.get(t2, [])) if t2 in singles_by_task else 100.0
-        savings = s1 + s2 - _group_expected_cost([best], 2)
-        bundle_scores.append((savings, t1, t2, best))
-
-    bundle_scores.sort(reverse=True)
-
-    used_tasks = set()
-    used_couriers = set()
-    result = []
-
-    # Pick top non-overlapping bundles
-    for _, t1, t2, best in bundle_scores:
-        if len([b for b in result if len(b[1]) >= 1]) >= n_bundles + sum(1 for _ in [1]):  # count bundles
-            pass
-        if t1 in used_tasks or t2 in used_tasks:
-            continue
-        if best[2] in used_couriers:
-            continue
-        if len([item for item in result if len(item[0].split(",")) >= 2]) >= n_bundles:
-            break
-        result.append((best[0], [best[2]]))
-        used_tasks.update([t1, t2])
-        used_couriers.add(best[2])
-
-    # Fill remaining with singles
-    for t in tasks:
-        if t in used_tasks:
-            continue
-        pool = singles_by_task.get(t, [])
-        avail = [c for c in pool if c[2] not in used_couriers]
-        if not avail:
-            continue
-        best = min(avail, key=lambda c: _group_expected_cost([c], 1))
-        result.append((best[0], [best[2]]))
-        used_couriers.add(best[2])
-
-    return result
-
-
-def _scarce_probe_multidispatch(singles_by_task, tasks, courier_count):
-    """K=2 multi-dispatch where possible, reject 2 worst tasks."""
-    task_costs = []
-    for t in tasks:
-        pool = singles_by_task.get(t, [])
-        if pool:
-            best = min(pool, key=lambda c: _group_expected_cost([c], 1))
-            task_costs.append((_group_expected_cost([best], 1), t, pool))
-        else:
-            task_costs.append((100.0, t, []))
-
-    task_costs.sort(reverse=True)
-    rejected = {t for _, t, _ in task_costs[:2]}
-
-    used = set()
-    result = []
-    # First pass: K=1 for all non-rejected
-    for _, t, pool in task_costs:
-        if t in rejected or not pool:
-            continue
-        avail = [c for c in pool if c[2] not in used]
-        if not avail:
-            continue
-        best = min(avail, key=lambda c: _group_expected_cost([c], 1))
-        result.append((best[0], [best[2]]))
-        used.add(best[2])
-
-    # Second pass: K=2 where beneficial and couriers remaining
-    for i, (tk, courier_ids) in enumerate(result):
-        if len(courier_ids) >= 2:
-            continue
-        t = tk if "," not in tk else tk.split(",")[0]
-        pool = singles_by_task.get(t, [])
-        if not pool:
-            continue
-        rows = [c for c in pool if c[2] in courier_ids]
-        avail = [c for c in pool if c[2] not in used]
-        if not avail:
-            continue
-        # Check if adding a second courier reduces expected cost
-        old_cost = _group_expected_cost(rows, 1)
-        best_extra = None
-        best_new = old_cost
-        for c in avail:
-            nc = _group_expected_cost(rows, 1, extra=c)
-            if nc < best_new - 1e-12:
-                best_new = nc
-                best_extra = c
-        if best_extra is not None:
-            result[i] = (tk, courier_ids + [best_extra[2]])
-            used.add(best_extra[2])
-
-    return result
-
-
-# ============================================================================
-# Local scoring models — each computes an expected total cost for a result
-# under a different judge hypothesis. Used offline to compare against the
-# platform-returned score for each probe and back out the true model.
-# ============================================================================
-
-def _predict_score(result, candidates, all_tasks, model):
-    row_map = {(c[0], c[2]): c for c in candidates}
-    used_tasks = set()
-    used_couriers = set()
-    total = 0.0
-    for task_key, courier_ids in result:
-        rows = []
-        for cid in courier_ids:
-            cand = row_map.get((task_key, cid))
-            if cand is None or cid in used_couriers:
-                return float("inf")
-            used_couriers.add(cid)
-            rows.append(cand)
-        if not rows:
-            return float("inf")
-        for tid in rows[0][1]:
-            if tid in used_tasks:
-                return float("inf")
-            used_tasks.add(tid)
-        total += _group_cost_by_model(rows, len(rows[0][1]), model)
-    total += 100.0 * (len(all_tasks) - len(used_tasks))
-    return total
-
-
-def _group_cost_by_model(rows, n_tasks, model):
-    n = len(rows)
-    if n == 0:
-        return 100.0 * n_tasks
-
-    if model == "avg-subset":
-        e = 0.0
-        for mask in range(1 << n):
-            p = 1.0
-            sm = 0.0
-            cnt = 0
-            for i, r in enumerate(rows):
-                if mask >> i & 1:
-                    p *= r[4]
-                    sm += r[3]
-                    cnt += 1
-                else:
-                    p *= 1.0 - r[4]
-            if cnt:
-                e += p * sm / cnt
-            else:
-                e += p * 100.0 * n_tasks
-        return e
-
-    if model == "max-w-accepter":
-        order = sorted(range(n), key=lambda i: -rows[i][4])
-        e = 0.0
-        prob_prev_reject = 1.0
-        for idx in order:
-            p = rows[idx][4]
-            e += prob_prev_reject * p * rows[idx][3]
-            prob_prev_reject *= 1.0 - p
-        e += prob_prev_reject * 100.0 * n_tasks
-        return e
-
-    if model == "min-score-accepter":
-        order = sorted(range(n), key=lambda i: rows[i][3])
-        e = 0.0
-        prob_prev_reject = 1.0
-        for idx in order:
-            p = rows[idx][4]
-            e += prob_prev_reject * p * rows[idx][3]
-            prob_prev_reject *= 1.0 - p
-        e += prob_prev_reject * 100.0 * n_tasks
-        return e
-
-    if model == "weighted":
-        prob_all_reject = 1.0
-        for r in rows:
-            prob_all_reject *= 1.0 - r[4]
-        sum_p = sum(r[4] for r in rows)
-        sum_ps = sum(r[4] * r[3] for r in rows)
-        avg_when_accepted = (sum_ps / sum_p) if sum_p > 0 else 100.0 * n_tasks
-        return (1.0 - prob_all_reject) * avg_when_accepted + prob_all_reject * 100.0 * n_tasks
-
-    return float("inf")
+	F=sorted(candidates,key=lambda c:c[3]);B=set();C=set();D=[]
+	for(G,E,A,I,J,K)in F:
+		if A in B:continue
+		if any(A in C for A in E):continue
+		B.add(A)
+		for H in E:C.add(H)
+		D.append((G,[A]))
+	return D

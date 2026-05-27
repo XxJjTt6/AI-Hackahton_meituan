@@ -1,0 +1,3 @@
+base 1199.1284207596611 groups 30 k Counter({2: 30}) task_groups Counter({1: 30})
+cols 1315 basecols 30 single 1285 bundle 0
+best_obj 1199.1284207596611 delta 0.0 path None

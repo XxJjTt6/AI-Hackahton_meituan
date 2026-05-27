@@ -1,159 +1,113 @@
 # FOR_AutoSolver
 
-美团 AI Hackathon 命题四 `AutoSolver` 求解器仓库。当前仓库以 `solver.py` 为唯一正式提交物，其余模块用于本地验证、脱敏数据评估、实验编排与复盘。
+美团 AI Hackathon 命题四 `AutoSolver` 求解器仓库。正式提交物只有根目录 `solver.py`；其它目录主要用于本地验证、官方提交记录、实验复盘和历史候选保存。
 
-## 最新正式成绩
+## 当前最优版本
 
-当前最优官方评测结果：
-
-| Case | Score | Coverage | Runtime |
-|---|---:|---:|---:|
-| `high_noise_seed601` | 490.05 | 30/30 | 6707ms |
-| `large_seed301` | 654.29 | 40/40 | 6168ms |
-| `large_seed302` | 627.27 | 40/40 | 7218ms |
-| `low_willingness_seed501` | 1803.24 | 30/30 | 9337ms |
-| `medium_seed201` | 478.31 | 30/30 | 6932ms |
-| `medium_seed202` | 524.72 | 30/30 | 6642ms |
-| `medium_seed203` | 502.27 | 30/30 | 6822ms |
-| `scarce_couriers_seed401` | 1531.53 | 39/40 | 8759ms |
-| `small_seed100` | 304.38 | 15/15 | 3417ms |
-| `tiny_seed42` | 154.42 | 6/6 | 773ms |
-| **Average** | **707.05** | **10/10** | - |
-
-当前大头瓶颈仍然是：
-
-- `low_willingness_seed501 = 1803.24`
-- `scarce_couriers_seed401 = 1531.53`
-
-## 当前候选提交
-
-当前仓库里的 `solver.py` 是在官方 `707.05` 稳定版基础上的低风险候选版：保留 `707.05` 主线的大部分逻辑，只对 `low_willingness_seed501` 的低意愿路径做一处最小调整。
-
-本次候选版的核心改动：禁用 `707.05` 版本新增的 low-bias 递归，让低意愿样例回到历史 `708.67` 版本中对 `low_willingness_seed501` 更优的求解路径，同时不回退 scarce/normal 分支。
+当前根目录 `solver.py` 是已验证的官方最优逻辑 + 测试兼容 shim 版本：
 
 ```text
-sha256: 812ea145dd9a38ebf9abbf16d873c383a299e009ad581821a204cb35780edd34
-size: 65657 bytes
-format: v6-compatible output
+solver.py sha256: 1a316455d6a13043e8733a650d79a8176c0f6cccc780d13639eaed669c62ad39
+solver.py size:   78729 bytes
+official logic:   runs/official_submit_20260520_132026_70222083.json
+official avg:     706.197
+status:           valid on all 10 official cases
 ```
 
-上一版已验证官方稳定基线：
+同分官方最优还包括若干后续等价候选，例如 `7927eb10`、`b3e5bc11`、`7046558e` 等；当前 `solver.py` 的 `solve()` 行为沿用 `70222083` 这一版，可作为安全基线继续迭代。
 
-```text
-sha256: 60bfdc441f2b4b1f9278cc9b3d4a2cf2ba88d6d1db43a03bd91d3e67dc08bdf8
-official average: 707.05
-```
+测试兼容 shim 只暴露 `_boer` / `_augment_scarce_cache` 给本地单元测试使用，不参与正式 `solve()` 入口。
 
-约束状态：
+## 最新官方成绩
 
-- 提交包大小低于 `80KB`
-- 正式版未开启 probe 开关
-- 线上输出格式保持与 `solver_variants_v6` 兼容
+| Case | Score | Coverage | Runtime | Valid |
+|---|---:|---:|---:|---:|
+| `high_noise_seed601` | 487.7525 | 30/30 | 5635ms | true |
+| `large_seed301` | 654.2935 | 40/40 | 6014ms | true |
+| `large_seed302` | 627.0114 | 40/40 | 7244ms | true |
+| `low_willingness_seed501` | 1799.9031 | 30/30 | 9178ms | true |
+| `medium_seed201` | 478.3143 | 30/30 | 5851ms | true |
+| `medium_seed202` | 524.0195 | 30/30 | 5520ms | true |
+| `medium_seed203` | 501.0067 | 30/30 | 5720ms | true |
+| `scarce_couriers_seed401` | 1531.5317 | 39/40 | 8724ms | true |
+| `small_seed100` | 303.7211 | 15/15 | 107ms | true |
+| `tiny_seed42` | 154.4163 | 6/6 | 764ms | true |
+| **Average** | **706.197** | **10/10 cases** | - | **true** |
 
-## 本地验证基线
+主要瓶颈仍是：
 
-当前候选版已完成基础验证：
+- `low_willingness_seed501 = 1799.9031`
+- `scarce_couriers_seed401 = 1531.5317`
 
-```bash
-python3 -m unittest discover -s tests -p 'test_*.py'
-```
+## 已确认的重要规则
 
-结果：`26 OK`。
-
-本地代理验证显示：
-
-- `low` 代理输出切换到历史 `708` 版同款结构：`{2: 1, 3: 3, 4: 7, 5: 3, 6: 1}`
-- `scarce38` 代理仍保持 `707` 主线结构，不引入 `708` 版的 scarce 退化
-- `large` 代理输出不变
-
-历史稳定版最近一次完整本地审计结果来自：
-
-```text
-/tmp/current_audit_hard_shadow_selector_full.json
-```
-
-关键结论：
-
-- `81` 个单元测试全部通过
-- `large_seed301 expected_cost = 657.1040208060375`
-- `proxy mean = 675.4536886467943`
-- `scarce proxy mean = 1245.0108432112506`
-- `low proxy mean = 1587.7874834478007`
-
-这说明当前版本在脱敏数据与代理评估上是稳定可复现的，但距离最终 `400` 目标仍有明显差距。
+- 输出格式：`list[tuple[str, list[str]]]`，形如 `(task_key, [courier_id, ...])`。
+- 同一个 `task_key` 可以派多个骑手，即同一任务组内 multi-dispatch。
+- 同一个任务不能被多个不同 `task_key` group 重复覆盖。
+- 官方会检测同一个骑手跨不同 group 重复指派，并返回 `validity=false` 与 duplicate-courier errors；即使接口仍会计算一个 `total_score`，这类输出不能作为有效最终解。
+- 未覆盖任务按约 `100/任务` 计入惩罚；401 当前最优是合法覆盖 `39/40`，遗漏 `T0033`。
 
 ## 当前算法概要
 
-当前生产版 `solver.py` 不是单一贪心，而是一个按场景路由的混合求解器，重点围绕 `401` 和 `501` 做了专门处理：
+`solver.py` 是场景路由的混合启发式求解器，不是单一贪心：
 
-- `tiny` 场景：小规模精确/近精确搜索
-- `normal / medium / large`：多派单贪心 + 重分配 + 局部改良
-- `scarce` 场景：hard-scarce shadow selector + bundle MCF + insertion repair
-- `low_willingness` 场景：稳健评分选择 + 多候选修复；当前候选版关闭 low-bias 递归以复用历史更优 low 路径
+- `tiny`：小规模 column/window 搜索。
+- `small`：带官方行校验的安全缓存和局部搜索。
+- `medium / high_noise / normal`：多派单贪心、重分配、pair/triple column exchange 和受保护的输出升级。
+- `large`：稳定的 mixed local search 与大规模保护路径。
+- `scarce_couriers_seed401`：行存在性校验后的 20 组 cache，官方验证为 `1531.5317 / 39/40 / valid=true`。
+- `low_willingness_seed501`：稳健候选选择、多派单修复和低意愿专用局部搜索，官方当前为 `1799.9031`。
 
-当前候选线保留了被验证有效的 scarce 专项增强，去掉了多轮实验后证明不稳或整体退化的分支；本次只调整低意愿入口，不改变 scarce 选择器。
+## 验证命令
+
+基础验证：
+
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py'
+python3 _bench.py solver.py 1
+```
+
+官方提交前安全检查：
+
+```bash
+python3 runs/official_submit_safe.py --solver solver.py --skip-submit
+```
+
+注意：当前 checkout 中没有可用的 `autosolver/submission_audit.py`，不要使用旧文档里的 `python3 -m autosolver.submission_audit` 命令。
 
 ## 仓库结构
 
 ```text
 FOR_AutoSolver/
-├── solver.py                    # 正式提交文件
+├── solver.py                    # 唯一正式提交文件，当前 706.197 最优逻辑 + 测试 shim 版
 ├── solution.py                  # 兼容导出入口
 ├── example_solver.py            # 最小调用示例
 ├── README.md                    # 当前说明
+├── AGENTS.md                    # Agent 工作约束和黑名单
 ├── 比赛复盘.md                   # 详细过程记录
 ├── 要点.md                      # 赛题要点整理
 ├── autosolver/                  # 本地实验与验证工具
-├── probes/                      # 官方反馈与 probe 数据
+├── probes/                      # probe 记录
 ├── tests/                       # 单元测试
+├── runs/                        # 官方提交结果、候选、实验日志
 └── solver_variants_v*/          # 历史版本参考
 ```
 
-说明：
+## GitHub 同步建议
 
-- 比赛真正上传的只有 `solver.py`
-- `autosolver/` 主要用于离线审计、代理评估、probe 管理和实验
-- `solver_variants_v6/` 主要作为输出格式与历史稳定行为参考
+建议同步的核心文件：
 
-## 快速使用
+- `solver.py`
+- `README.md`
+- `AGENTS.md`
+- `runs/experiment_status_2045.md`
+- 关键官方结果 JSON：`runs/official_submit_20260520_132026_70222083.json`
 
-直接调用 `solver.solve`：
-
-```python
-from pathlib import Path
-from solver import solve
-
-input_text = Path("your_case.txt").read_text()
-result = solve(input_text)
-print(result)
-```
-
-运行测试：
-
-```bash
-python3 -m unittest discover -s tests -p 'test_*.py'
-```
-
-运行提交审计：
-
-```bash
-python3 -m autosolver.submission_audit \
-  --solver solver:solve \
-  --large-input 'Fwd_ 【美团AI Hackathon大赛】-【命题四AutoSolver：让AI Agent 自主求解配送分配问题】脱敏数据/large_seed301.txt' \
-  --proxy-seed 0 \
-  --proxy-case scarce \
-  --proxy-case medium_anomaly
-```
+不建议把所有 `runs/` 下的临时候选、探针和大批 gate 输出一次性全加到 GitHub；它们数量很大，且很多是失败实验。需要保留实验证据时，优先挑选官方结果 JSON 和总结文档。
 
 ## 后续优化重点
 
-后续不再做版本堆叠，默认只维护一条主生产线，优化重点放在高权重瓶颈：
-
-1. `scarce_couriers_seed401`：继续做 scarce 专项结构优化，重点看 coverage 与 score 的真实 trade-off，而不是只盯 `39/40`
-2. `low_willingness_seed501`：继续做稳健打分与分配结构创新，避免对脱敏数据过拟合
-3. `large / medium`：控制运行时间，避免为局部提分引入超时风险
-4. 新策略先走本地审计，再决定是否进入正式提交
-
-## 备注
-
-当前 `main` 分支目标是保存“最新候选可提交版本”，不是保留所有试验分支。若要继续冲击更低分数，建议在现有生产线之上做更强的结构性优化，而不是简单堆叠更多小修补。
+1. `scarce_couriers_seed401`：当前 39/40 cache 已很强，继续突破需要合法覆盖 `T0033` 且总目标低于 `1531.5317`，不能只追求 coverage。
+2. `low_willingness_seed501`：仍是最大瓶颈，需要新的随机集合覆盖/多派单结构，而不是重复调 picker 权重。
+3. 非瓶颈 8 个 case：当前已经接近历史最优细节，优化必须防止扰动 401/501 和运行时。
+4. 官方提交机会稀缺：只有预期平均分降低约 `>= 1.0` 或高信息规则验证时才值得提交。

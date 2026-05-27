@@ -1,0 +1,10 @@
+solver /Users/比赛/FOR_AutoSolver_706.72/solver.py
+  large    rows=33780 couriers= 80 time= 8.72s cost=  657.10 cov=40/40 groups=40 k={2: 34, 3: 3, 1: 3}
+  low025   rows=14623 couriers= 60 time= 9.26s cost= 1922.20 cov=30/30 groups=15 k={4: 8, 2: 1, 3: 2, 5: 4}
+  low030   rows=14623 couriers= 60 time= 9.14s cost= 1766.69 cov=30/30 groups=15 k={4: 8, 2: 1, 3: 2, 5: 4}
+  scarce40 rows=16932 couriers= 40 time= 9.30s cost= 1097.85 cov=40/40 groups=40 k={1: 40}
+solver /Users/比赛/FOR_AutoSolver_706.72/runs/candidate_scarce_cache_as_seed_20260520.py
+  large    rows=33780 couriers= 80 time= 8.55s cost=  657.10 cov=40/40 groups=40 k={2: 34, 3: 3, 1: 3}
+  low025   rows=14623 couriers= 60 time= 9.16s cost= 1922.20 cov=30/30 groups=15 k={4: 8, 2: 1, 3: 2, 5: 4}
+  low030   rows=14623 couriers= 60 time= 9.58s cost= 1766.69 cov=30/30 groups=15 k={4: 8, 2: 1, 3: 2, 5: 4}
+  scarce40 rows=16932 couriers= 40 time=10.33s cost= 1097.85 cov=40/40 groups=40 k={1: 40}

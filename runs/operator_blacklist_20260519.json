@@ -1,0 +1,130 @@
+{
+  "safe_best_sha": "f65d16acf4afaaa5c47f2f5042f0caf41d98a111ed0ba2bf106faa05f6810d05",
+  "self_budget_used": 4,
+  "self_budget_limit": 7,
+  "blacklist": [
+    {
+      "family": "same_coverage_repack",
+      "reason": "official negative twice; reproduces scarce missing T0028,T0033 bad pattern",
+      "shas": [
+        "6950e0cb",
+        "8a67c77f"
+      ],
+      "decision": "do_not_submit_descendants"
+    },
+    {
+      "family": "t0033_repack",
+      "reason": "official no-op/negative; no hidden T0033 improvement found",
+      "shas": [
+        "4f1fd7c7",
+        "d16378ed",
+        "94c02f02"
+      ],
+      "decision": "do_not_resubmit"
+    },
+    {
+      "family": "low_k2_shape",
+      "reason": "proxy and official negatives; official low already best-known",
+      "decision": "do_not_submit"
+    },
+    {
+      "family": "low_picker_weights",
+      "reason": "mixed low025 improvements with low030 regressions",
+      "shas": [
+        "4f972d96"
+      ],
+      "decision": "do_not_submit"
+    },
+    {
+      "family": "broad_scarce_repack",
+      "reason": "runtime/path risk and no official improvement",
+      "decision": "do_not_submit_without_new_invariant"
+    },
+    {
+      "sha": "ac55cf9c",
+      "avg": 710.9829,
+      "reason": "global penalty80 objective replacement official negative across almost all cases",
+      "remaining_after_submit": 5
+    },
+    {
+      "sha": "af88b6fc",
+      "avg": 711.9778,
+      "reason": "high guard improved high but contaminated scarce to 1589.3393",
+      "remaining_after_submit": 4
+    }
+  ],
+  "whitelist_for_stability_only": [
+    {
+      "family": "remove_late_normal_related",
+      "sha": "5006462d",
+      "official": "no-op 706.4746",
+      "decision": "safe_no_score_gain"
+    }
+  ],
+  "official_noops": [
+    {
+      "family": "low_picker_min_guard",
+      "sha": "cb80b650",
+      "official": "706.4746 exact no-op",
+      "decision": "do_not_resubmit"
+    },
+    {
+      "family": "scarce_t0033_triple_only",
+      "sha": "61063fa8",
+      "official": "706.4746 exact no-op",
+      "decision": "do_not_resubmit"
+    },
+    {
+      "family": "scarce_add_t0033_single",
+      "sha": "63c3d072",
+      "official": "706.4746 exact no-op",
+      "decision": "do_not_resubmit"
+    },
+    {
+      "family": "scarce_add_extra_same_key",
+      "sha": "a3d82be3",
+      "official": "706.4746 exact no-op",
+      "decision": "do_not_resubmit"
+    },
+    {
+      "family": "low_official_cache_2opt",
+      "sha": "7bc511c6",
+      "official": "706.4746 exact no-op",
+      "decision": "do_not_resubmit"
+    },
+    {
+      "family": "low_official_cache_3opt_worst",
+      "sha": "f4ade6b4",
+      "official": "706.4746 exact no-op",
+      "decision": "do_not_resubmit"
+    },
+    {
+      "family": "low_official_cache_move_kmix",
+      "sha": "0c8d5ace",
+      "official": "706.4746 exact no-op",
+      "decision": "do_not_resubmit"
+    },
+    {
+      "family": "low_official_cache_random_search",
+      "sha": "95581ea7",
+      "official": "706.4746 exact no-op",
+      "decision": "do_not_resubmit"
+    }
+  ],
+  "confirmed_improvements": [
+    {
+      "sha": "b8253edc",
+      "avg": 706.4522,
+      "case": "medium_seed202",
+      "change": "bad202 -> better202 direct guarded replacement",
+      "remaining_after_submit": 7
+    },
+    {
+      "sha": "41db4b34",
+      "avg": 706.4264,
+      "case": "large_seed302",
+      "change": "all-submission official-column recombination guarded replacement",
+      "remaining_after_submit": 6
+    }
+  ]
+}

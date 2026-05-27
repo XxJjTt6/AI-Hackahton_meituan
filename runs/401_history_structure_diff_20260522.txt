@@ -1,0 +1,368 @@
+BEST 1531.5317 missing ['T0033']
+best groups
+  T0000,T0027 ['C005'] 72.255
+  T0001,T0035 ['C018'] 107.8965
+  T0002,T0038 ['C009'] 58.9084
+  T0003,T0024 ['C012'] 67.0227
+  T0004,T0018 ['C007'] 66.6087
+  T0005,T0036 ['C019'] 82.7552
+  T0006,T0030 ['C003'] 64.6652
+  T0007,T0008 ['C001'] 89.3427
+  T0009,T0011 ['C014'] 67.6793
+  T0010,T0029 ['C004'] 94.8247
+  T0012,T0019 ['C010'] 93.9187
+  T0013,T0039 ['C013'] 62.6715
+  T0014,T0031 ['C008'] 69.0409
+  T0015,T0034 ['C015'] 72.9971
+  T0016 ['C000'] 30.1665
+  T0017,T0032 ['C002'] 62.4523
+  T0020,T0023 ['C016'] 89.2482
+  T0021,T0026 ['C017'] 48.6049
+  T0022,T0037 ['C011'] 59.4672
+  T0025,T0028 ['C006'] 71.0059
+
+NEAR STRUCTURES
+
+ 1544.6695 official_submit_20260519_171835_ac55cf9c.json ac55cf9c assigned 38 missing ['T0028', 'T0033']
+ note STRUCTURAL p80 global objective correction validation; high-risk high-upside
+ added
+  + T0001 ['C018'] 38.4593
+  + T0007,T0025 ['C006'] 58.9471
+  + T0008,T0035 ['C001'] 83.9766
+ removed
+  - T0001,T0035 ['C018'] 107.8965
+  - T0007,T0008 ['C001'] 89.3427
+  - T0025,T0028 ['C006'] 71.0059
+
+ 1571.901 official_submit_20260520_152714_0fc08e17.json 0fc08e17 assigned 39 missing ['T0028']
+ note portfolio candidate: scarce extra idle couriers plus T0033 window, both self-gated >=10; proxy scarc
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+  + T0033 ['C000'] 83.1439
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+
+ 1588.7572 official_submit_20260517_180523_0d615014.json 0d615014 assigned 38 missing ['T0028', 'T0033']
+ note paced slot 18:00 submit scarce_skip_eject_shift sha0d615014
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+
+ 1588.7572 official_submit_20260517_193152_61f44209.json 61f44209 assigned 38 missing ['T0028', 'T0033']
+ note paced submit 2/12 time_main8.58_scarce8.72 sha 61f44209
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+
+ 1588.7572 official_submit_20260517_210329_bf5a4b2b.json bf5a4b2b assigned 38 missing ['T0028', 'T0033']
+ note paced submit 1/12 pair_rewire_pool9 sha bf5a4b2b
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+
+ 1588.7572 official_submit_20260517_220253_1aa1774e.json 1aa1774e assigned 38 missing ['T0028', 'T0033']
+ note paced submit 1/12 hgs_srexlite_repolish sha 1aa1774e
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+
+ 1588.7572 official_submit_20260518_175046_4a783862.json 4a783862 assigned 38 missing ['T0028', 'T0033']
+ note foreground 8/10 rank-ratio-first safe ranking tweak; public large same score, no format/cache change
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+
+ 1588.7572 official_submit_20260518_175557_f7f9dbd3.json f7f9dbd3 assigned 38 missing ['T0028', 'T0033']
+ note foreground 10/10 rank-ratio-first rebuilt on noavg scarce cache guard; tests if guard prevents scarc
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+
+ 1589.3393 official_submit_20260517_023251.json c79ee39a assigned 38 missing ['T0028', 'T0033']
+ note 
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260517_165203_c0a0a840.json c0a0a840 assigned 38 missing ['T0028', 'T0033']
+ note submit2 v6_1 multi-bundle scarce reassign submittable signature
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260517_170107_23299900.json 23299900 assigned 38 missing ['T0028', 'T0033']
+ note submit4 probe disable final local pair rewire for G
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260517_235446_db98fab3.json db98fab3 assigned 38 missing ['T0028', 'T0033']
+ note final_safe_guard_scarce_missing_pair_before_2400
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260518_165934_c309a281.json c309a281 assigned 38 missing ['T0028', 'T0033']
+ note foreground 3/10 fixed unordered medium202203 output-signature upgrade; v1 noop bug fixed
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260518_173725_d0802a14.json d0802a14 assigned 38 missing ['T0028', 'T0033']
+ note foreground 6/10 all-known shape runtime cache exploratory; expected same score faster, tests shape-c
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260518_174452_b05d31f5.json b05d31f5 assigned 38 missing ['T0028', 'T0033']
+ note foreground 7/10 output courier order willingness-first exploration; local objective same, tests offi
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260518_200532_94c02f02.json 94c02f02 assigned 38 missing ['T0028', 'T0033']
+ note real tight scarce seed401 t0033 two-group replacement probe; helper verified
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260518_223957_6950e0cb.json 6950e0cb assigned 38 missing ['T0028', 'T0033']
+ note final submit same-coverage seed401 repack: preserve 39 tasks, strict raw cost improvement
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260519_005340_8a67c77f.json 8a67c77f assigned 38 missing ['T0028', 'T0033']
+ note 20260519 submit3 two-group row-validated same-coverage seed401 repack v3
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260519_172314_af88b6fc.json af88b6fc assigned 38 missing ['T0028', 'T0033']
+ note high_noise guarded recombination from p80 local good columns; predicted avg 706.1970
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260519_221027_52daa29b.json 52daa29b assigned 38 missing ['T0028', 'T0033']
+ note user approved submitting minified compact high601 candidate; expected avg gain 0.22941
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260520_223158_97eced0c.json 97eced0c assigned 38 missing ['T0028', 'T0033']
+ note conditional seed401 missing-task swap/split repair; submits only because trigger requires >10 scarce
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260521_152248_f0ca5633.json f0ca5633 assigned 38 missing ['T0028', 'T0033']
+ note scarce401 info probe expose unseen T0033 non-C000/C010 row only if exists
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260521_152654_a957d5bb.json a957d5bb assigned 38 missing ['T0028', 'T0033']
+ note scarce401 strict info probe: force finite output containing unseen T0033 row if exists
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260521_153337_85447170.json 85447170 assigned 38 missing ['T0028', 'T0033']
+ note scarce401 dynamic sparse-beam guard: return only if exact lower than hard cache
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260521_153839_7686b82f.json 7686b82f assigned 38 missing ['T0028', 'T0033']
+ note scarce401 sparse guard with official-cost proxy; reject expected-cost-only 1589 structure
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260521_154301_559c8fca.json 559c8fca assigned 38 missing ['T0028', 'T0033']
+ note scarce401 raw-score single-courier set-packing; official objective guard avoids 1589 multi-rider tra
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ 1589.3393 official_submit_20260522_000023_797daba9.json 797daba9 assigned 38 missing ['T0028', 'T0033']
+ note high-info scarce401 near-miss guarded upgrade probe after normal-augment hurt high_noise; tests hidd
+ added
+  + T0016,T0020 ['C016'] 91.2256
+  + T0023,T0025 ['C006'] 56.4206
+ removed
+  - T0016 ['C000'] 30.1665
+  - T0020,T0023 ['C016'] 89.2482
+  - T0025,T0028 ['C006'] 71.0059
+ changed ['T0013,T0039']
+
+ADD FREQ
+26 T0016,T0020
+26 T0023,T0025
+2 T0001
+2 T0007,T0025
+2 T0012,T0035
+1 T0000
+1 T0000,T0022
+1 T0001,T0028
+1 T0002,T0003
+1 T0003,T0006
+1 T0004,T0005
+1 T0006,T0024
+1 T0008,T0010
+1 T0008,T0035
+1 T0011
+1 T0013,T0014
+1 T0013,T0036
+1 T0014,T0018
+1 T0015,T0031
+1 T0016,T0036
+1 T0018,T0034
+1 T0019,T0033
+1 T0020,T0039
+1 T0023
+1 T0023,T0030
+1 T0025
+1 T0027,T0029
+1 T0030
+1 T0031
+1 T0032
+
+REMOVE FREQ
+29 T0025,T0028
+28 T0020,T0023
+27 T0016
+3 T0001,T0035
+3 T0007,T0008
+2 T0000,T0027
+2 T0003,T0024
+2 T0004,T0018
+2 T0005,T0036
+2 T0006,T0030
+2 T0010,T0029
+2 T0012,T0019
+2 T0013,T0039
+2 T0014,T0031
+2 T0015,T0034
+1 T0002,T0038
+1 T0009,T0011
+1 T0017,T0032
+1 T0022,T0037

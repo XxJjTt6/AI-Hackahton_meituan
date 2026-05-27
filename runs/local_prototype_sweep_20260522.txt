@@ -1,0 +1,101 @@
+
+=== 1/18 large bundle_redist ===
+$ python3 runs/prototype_bundle_redundancy_exchange.py Fwd_ 【美团AI Hackathon大赛】-【命题四AutoSolver：让AI Agent 自主求解配送分配问题】脱敏数据/large_seed301.txt --seconds 4
+inc=657.104021 bundle_redist=657.104021 delta=+0.000000 cov=40/40 groups=40 moves=0 elapsed=11.781s
+EXIT=0 elapsed=12.58s
+
+=== 2/18 large augment ===
+$ python3 runs/prototype_augmenting_path_exchange.py Fwd_ 【美团AI Hackathon大赛】-【命题四AutoSolver：让AI Agent 自主求解配送分配问题】脱敏数据/large_seed301.txt --seconds 4 --depth 4 --branch 16
+inc=657.104021 aug=657.104021 delta=+0.000000 cov=40/40 groups=40 moves=0 elapsed=7.551s
+EXIT=0 elapsed=8.03s
+
+=== 3/18 large bundle_redist ===
+$ python3 runs/prototype_bundle_redundancy_exchange.py Fwd_ 【美团AI Hackathon大赛】-【命题四AutoSolver：让AI Agent 自主求解配送分配问题】脱敏数据/large_seed301.txt --seconds 8
+inc=657.104021 bundle_redist=657.104021 delta=+0.000000 cov=40/40 groups=40 moves=0 elapsed=11.707s
+EXIT=0 elapsed=12.44s
+
+=== 4/18 large augment ===
+$ python3 runs/prototype_augmenting_path_exchange.py Fwd_ 【美团AI Hackathon大赛】-【命题四AutoSolver：让AI Agent 自主求解配送分配问题】脱敏数据/large_seed301.txt --seconds 8 --depth 4 --branch 16
+inc=657.104021 aug=657.104021 delta=+0.000000 cov=40/40 groups=40 moves=0 elapsed=7.301s
+EXIT=0 elapsed=7.88s
+
+=== 5/18 low_cal low_sa_4 ===
+$ python3 runs/prototype_low_k2_swap_sa.py runs/official_calibrated_low_synth.txt --seconds 5 --seed 4
+inc=1199.128421 sa=1199.128421 delta=+0.000000 moves=1664 elapsed=8.834s
+EXIT=0 elapsed=9.32s
+
+=== 6/18 low_cal low_sa_5 ===
+$ python3 runs/prototype_low_k2_swap_sa.py runs/official_calibrated_low_synth.txt --seconds 5 --seed 5
+inc=1199.128421 sa=1199.128421 delta=+0.000000 moves=1270 elapsed=8.956s
+EXIT=0 elapsed=9.46s
+
+=== 7/18 low_cal low_sa_6 ===
+$ python3 runs/prototype_low_k2_swap_sa.py runs/official_calibrated_low_synth.txt --seconds 5 --seed 6
+inc=1199.128421 sa=1199.128421 delta=+0.000000 moves=1660 elapsed=9.147s
+EXIT=0 elapsed=9.68s
+
+=== 8/18 low_cal dual_master ===
+$ python3 runs/prototype_dual_priced_master.py runs/official_calibrated_low_synth.txt --max-columns 420 --seconds 4 --nodes 50000
+tasks=30 candidates=1800 columns=427
+incumbent cost=1199.128421 covered=30 groups=30
+master    cost=1199.128421 covered=30 groups=30
+delta=+0.000000 elapsed=4.174s
+EXIT=0 elapsed=4.68s
+
+=== 9/18 low_like low_sa_4 ===
+$ python3 runs/prototype_low_k2_swap_sa.py runs/official_like_low_synth.txt --seconds 5 --seed 4
+inc=1616.758602 sa=1616.758602 delta=+0.000000 moves=1549 elapsed=13.849s
+EXIT=0 elapsed=14.45s
+
+=== 10/18 low_like low_sa_5 ===
+$ python3 runs/prototype_low_k2_swap_sa.py runs/official_like_low_synth.txt --seconds 5 --seed 5
+inc=1616.758602 sa=1616.758602 delta=+0.000000 moves=1405 elapsed=13.725s
+EXIT=0 elapsed=14.31s
+
+=== 11/18 low_like low_sa_6 ===
+$ python3 runs/prototype_low_k2_swap_sa.py runs/official_like_low_synth.txt --seconds 5 --seed 6
+inc=1616.758602 sa=1616.758602 delta=+0.000000 moves=1546 elapsed=13.968s
+EXIT=0 elapsed=14.54s
+
+=== 12/18 low_like dual_master ===
+$ python3 runs/prototype_dual_priced_master.py runs/official_like_low_synth.txt --max-columns 420 --seconds 4 --nodes 50000
+tasks=30 candidates=14623 columns=448
+incumbent cost=1616.758602 covered=30 groups=30
+master    cost=1616.758602 covered=30 groups=30
+delta=-0.000000 elapsed=9.791s
+EXIT=0 elapsed=10.45s
+
+=== 13/18 medium_synth bundle_redist ===
+$ python3 runs/prototype_bundle_redundancy_exchange.py runs/synth_medium_from_large301_30x60.txt --seconds 4
+inc=515.516057 bundle_redist=515.516057 delta=+0.000000 cov=30/30 groups=30 moves=0 elapsed=8.372s
+EXIT=0 elapsed=8.92s
+
+=== 14/18 medium_synth augment ===
+$ python3 runs/prototype_augmenting_path_exchange.py runs/synth_medium_from_large301_30x60.txt --seconds 4 --depth 4 --branch 16
+inc=515.516057 aug=515.516057 delta=+0.000000 cov=30/30 groups=30 moves=0 elapsed=6.272s
+EXIT=0 elapsed=6.72s
+
+=== 15/18 medium_synth bundle_redist ===
+$ python3 runs/prototype_bundle_redundancy_exchange.py runs/synth_medium_from_large301_30x60.txt --seconds 8
+inc=515.516057 bundle_redist=515.516057 delta=+0.000000 cov=30/30 groups=30 moves=0 elapsed=8.929s
+EXIT=0 elapsed=9.45s
+
+=== 16/18 medium_synth augment ===
+$ python3 runs/prototype_augmenting_path_exchange.py runs/synth_medium_from_large301_30x60.txt --seconds 8 --depth 4 --branch 16
+inc=515.516057 aug=515.516057 delta=+0.000000 cov=30/30 groups=30 moves=0 elapsed=6.551s
+EXIT=0 elapsed=7.17s
+
+=== 17/18 scarce_synth scarce_pack ===
+$ python3 runs/prototype_scarce_set_packing.py runs/synth_scarce_large301_40x40.txt --max-k 2 --top-rows 10 --max-columns 1800 --beam 4000
+columns 1800 tasks 40 elapsed 20.56
+baseline 1081.389644 cov 40 struct {1: 28, 2: 6} {1: 28, 2: 6}
+packed 1067.940007 delta -13.449637 cov 40 struct {1: 30, 2: 5} {1: 30, 2: 5} valid True
+[('T0000,T0008', ['C021', 'C003']), ('T0001', ['C009']), ('T0002,T0037', ['C017', 'C001']), ('T0003', ['C008']), ('T0004,T0012', ['C002', 'C026']), ('T0005', ['C025']), ('T0006', ['C005', 'C032']), ('T0007', ['C022']), ('T0009', ['C010']), ('T0010', ['C037']), ('T0011', ['C018']), ('T0013', ['C035']), ('T0014', ['C038']), ('T0015', ['C012']), ('T0016', ['C000']), ('T0017', ['C011']), ('T0018', ['C027']), ('T0019,T0024', ['C023']), ('T0020,T0030', ['C015', 'C006']), ('T0021', ['C034']), ('T0022', ['C019']), ('T0023', ['C036']), ('T0025', ['C013']), ('T0026', ['C020']), ('T0027', ['C007']), ('T0028', ['C016']), ('T0029', ['C033']), ('T0031', ['C029']), ('T0032', ['C030']), ('T0033', ['C031']), ('T0034', ['C039']), ('T0035', ['C028']), ('T0036', ['C004']), ('T0038', ['C024']), ('T0039', ['C014'])]
+EXIT=0 elapsed=21.29s
+
+=== 18/18 scarce_synth scarce_probe ===
+$ python3 runs/probe_401_unobserved_candidates_from_synth.py runs/synth_scarce_large301_40x40.txt
+inc 1097.8470554 covered 40 used 40 groups 40
+improving one-row candidates 0
+improving two-row candidates 0
+EXIT=0 elapsed=13.91s

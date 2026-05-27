@@ -1,0 +1,2535 @@
+Towards large-scale probabilistic set covering problems: an
+efficient Benders decomposition approach
+Wei Lv a , Wei-Kun Chen a , Yi-Long Chena , and Yu-Hong Dai b,c
+
+arXiv:2402.18795v2 [math.OC] 23 Mar 2026
+
+a
+
+School of Mathematics and Statistics, Beijing Institute of Technology, Beijing 100081, China,
+{lvwei,chenweikun,chenyilong}@bit.edu.cn
+b State Key Laboratory of Mathematical Sciences, Academy of Mathematics and Systems Science,
+Chinese Academy of Sciences, Beijing 100190, China
+c School of Mathematical Sciences, University of Chinese Academy of Sciences, Beijing 100049, China,
+dyh@lsec.cc.ac.cn
+
+March 24, 2026
+
+Abstract
+In this paper, we investigate the probabilistic set covering problem (PSCP) in which the
+right-hand side is a binary random vector and the covering constraint is required to be satisfied with a prespecified probability. We consider the case with a finite discrete distribution of
+the random vector, which usually arises in the context of the sample average approximation
+approach. We develop an effective Benders decomposition (BD) algorithm for solving largescale PSCPs, which enjoys two key advantages: (i) the number of variables in the underlying
+Benders reformulation is independent of the scenario size; and (ii) the Benders cuts can be
+separated by an efficient combinatorial algorithm. For the special case that the random
+vector is a combination of several independent random blocks/subvectors, we explicitly take
+this kind of block structure into consideration and develop a more efficient BD algorithm.
+Moreover, to further speed up the two proposed BD algorithms, we develop a class of strong
+valid inequalities, which are guaranteed to be facet-defining for the polytope induced by the
+probabilistic constraint. Numerical results on instances with up to one million scenarios
+demonstrate the effectiveness of the proposed BD algorithms over a black-box mixed integer
+programming solver’s branch-and-cut and automatic BD algorithms and a state-of-the-art
+algorithm in the literature.
+Keywords: Benders decomposition · Large-scale optimization · Probabilistic set covering ·
+Sample average approximations
+
+1
+
+Introduction
+
+In this paper, we consider the probabilistic set covering problem (PSCP) of the form:
+
+min c⊤ x : P{Ax ≥ ξ} ≥ 1 − ϵ, x ∈ {0, 1}n ,
+
+1
+
+(PSCP)
+
+where A is a 0-1 matrix of dimension m × n, c ∈ Rn+ is the cost of columns, ϵ is a confidence
+parameter chosen by the decision maker, typically near zero, and ξ is a random vector taking
+values in {0, 1}m . (PSCP) generalizes the well-known set covering problem (SCP) (Toregas et al.,
+1971) where the random vector ξ is replaced by the all ones vector and has obvious applications
+in location problems (Beraldi and Ruszczyński, 2002; Norkin, 2018). It also serves as a building
+block in various applications; see Saxena et al. (2010); Wu et al. (2016); Azizi et al. (2022); Feng
+et al. (2024).
+(PSCP) falls in the class of probabilistic programs (also known as chance-constrained programs), which has been extensively investigated in the literature. We refer to the surveys Ahmed
+and Shapiro (2008); Küçükyavuz and Sen (2017); Küçükyavuz and Jiang (2022); Prékopa (2003)
+for a detailed discussion of probabilistic programs and the various algorithms. Beraldi and
+Ruszczyński (2002) first investigated (PSCP) and developed a specialized branch-and-bound algorithm, which involves enumerating the so-called (1 − ϵ)-efficient points introduced by Prékopa
+(1990) and solving a deterministic SCP for each (1−ϵ)-efficient point. Saxena et al. (2010) studied
+the case with the assumption that the random vector ξ can be decomposed into T blocks/subvectors ξ 1 , . . . , ξ T formed by subsets Mt ⊆ [m], and ξ t1 and ξ t2 are independent for any two distinct
+t1 , t2 ∈ [T ] (throughout the paper, for a nonnegative integer τ , we denote [τ ] = {1, . . . , τ } where
+[τ ] = ∅ if τ = 0). Note that this assumption is not restrictive as it encompasses the cases of all
+independent and dependent random variables (Beraldi and Ruszczyński, 2002). Problem (PSCP)
+in this special case can be rewritten as
+(
+)
+T
+Y
+⊤
+t
+t
+n
+(PSCP’)
+min c x :
+P{A x ≥ ξ } ≥ 1 − ϵ, x ∈ {0, 1} ,
+t=1
+
+where At is the submatrix of A formed by the rows in Mt , t ∈ [T ]. Saxena et al. (2010) developed
+an equivalent mixed integer programming (MIP) formulation for (PSCP’) based on the (1 − ϵ)efficient and -inefficient points of the distribution of ξ t and solved it by a customized branch-and-cut
+(B&C) algorithm. For set covering models with uncertainty on the constraint matrix A, we refer to
+Ahmed and Papageorgiou (2013); Beraldi and Bruni (2010); Fischetti and Monaci (2012); Hwang
+(2004); Jiang and Xie (2025); Lutter et al. (2017); Shen and Jiang (2023); Song and Luedtke
+(2013); Wu and Küçükyavuz (2019) and the references therein.
+One weakness of the above two approaches for solving (PSCP) is that they require an enumeration of the (1 − ϵ)-efficient (and -inefficient) points of the distribution of ξ or ξ t , which could
+be computationally demanding, especially when the dimensions are large. In addition, the MIP
+formulation of Saxena et al. (2010) may grow exponentially with the dimensions of ξ t , making it
+only capable of solving (PSCP) with small dimensions of ξ t . Luedtke and Ahmed (2008) addressed
+this difficulty by using the sample average approximation (SAA) approach (Luedtke and Ahmed,
+2008; Pagnoncelli et al., 2009), where (PSCP) is replaced by an approximation problem based
+on Monte Carlo samples of the random vector ξ. The approximation problem is also a form of
+(PSCP) but has a finite discrete distribution of ξ. As such, it can be reformulated as a deterministic MIP problem and solved by the state-of-the-art MIP solvers. In general, the selection of the
+scenario size is crucial for the approximation quality; the larger the scenario size, the smaller the
+approximation error; see Ahmed and Shapiro (2008); Luedtke and Ahmed (2008); Nemirovski and
+Shapiro (2006) for related discussions. However, since the problem size of the MIP formulation
+grows linearly with the number of scenarios, this also poses a new challenge for MIP solvers to
+solve (PSCP) with a huge number of scenarios.
+
+2
+
+1.1
+
+Contributions and outlines
+
+The main motivation of this paper is to investigate decomposition based algorithms to solve largescale PSCPs. In particular,
+(i) For PSCPs without the consideration of a block structure of ξ, i.e., problem (PSCP), we
+investigate the MIP formulation of Luedtke and Ahmed (2008) and propose a customized
+single-cut Benders decomposition (BD) algorithm where the scenario variables are projected
+out from the problem formulation and the Benders cuts are separated on the fly. Two key
+advantages of the proposed BD algorithm, which make it capable of solving (PSCP) with
+a huge number of scenarios, are: (i) the number of variables in the underlying Benders
+reformulation is equal to m + n but is independent of the number of scenarios of the random
+data; and (ii) the Benders cuts can be separated by an efficient combinatorial algorithm.
+(ii) For PSCPs with a block structure of ξ (Saxena et al., 2010), i.e., problem (PSCP’), we
+develop a mixed integer nonlinear programming (MINLP) formulation, and propose a multicut customized BD algorithm for it. The proposed multi-cut BD algorithm explicitly takes
+the block structure of the random vector ξ into account, and adds up to T Benders cuts
+in a single iteration, which renders the BD algorithm able to converge more quickly. With
+this feature, we show that although both MIP and MINLP formulations can be seen as
+approximations of the PSCP in the context of the SAA approach, the multi-cut BD algorithm
+for the MINLP formulation is even more efficient than the single-cut BD algorithm for the
+MIP formulation.
+(iii) To further speed up the two proposed BD algorithms, we leverage the sequential lifting
+technique (Wolsey, 1976; Richard, 2011) and develop a class of strong valid inequalities—
+lifted cover inequalities, which, unlike the Benders cuts, are guaranteed to be facet-defining
+for the polytope induced by the probabilistic constraint. Moreover, to alleviate the potential
+computational burden spent in the lifting procedure, we investigate a subclass of them—the
+maximal clique inequalities, which enjoy light-weight algorithms for their computation and
+separation. Equipped with the maximal clique inequalities, the two proposed BD algorithms
+converge much faster, especially for instances with a small confidence parameter ϵ.
+By extensive computational experiments on a testset of 7200 PSCP instances with up to 106
+scenarios, we demonstrate the effectiveness of our proposed BD algorithms for solving large-scale
+PSCPs over existing state-of-the-art approaches. In particular, for PSCPs without the consideration of a block structure of the random vector ξ, the proposed BD algorithm is much more efficient
+than a state-of-the-art MIP solver’s B&C and automatic BD algorithms (when the number of scenarios is large); for PSCPs with a block structure of ξ, the proposed BD algorithm is much more
+robust than the state-of-the-art approach in Saxena et al. (2010) in terms of solving (PSCP’) with
+different input parameters.
+It deserves to mention that although the BD algorithms are proposed to tackle PSCPs, they can
+also be applied to solve other variants of PSCPs that involve the probabilistic covering constraint
+P{Ax ≥ ξ} ≥ 1 − ϵ where ξ is a binary random vector. In Online Appendix A, we consider three
+variants of the PSCP investigated in Saxena et al. (2010) (i.e., the probabilistic versions of the
+single-source capacitated facility location problem, capacitated warehouse location problem, and
+capacitated p-median problem), and demonstrate the efficiency of the proposed BD algorithms
+over existing state-of-the-art approaches.
+3
+
+Luedtke (2014) and Liu et al. (2016) developed decomposition algorithms along with the mixing inequalities (Atamtürk et al., 2000; Günlük and Pochet, 2001; Luedtke et al., 2010) for a more
+general setting—the two-stage chance-constrained programs—in which the left-hand side of the
+constraints may also involve uncertainty. The decomposition algorithms and mixing inequalities,
+however, are fundamentally different from the ones proposed in this paper. First, the decomposition algorithms of Luedtke (2014) and Liu et al. (2016) attempt to project the second stage
+variables out from the problem formulation but still involve scenario variables. In contrast, the
+proposed BD algorithms exploit the structural properties of the PSCP and project the scenario
+variables out from the problem formulations, making them capable of solving PSCPs with a huge
+number of scenarios. Second, the mixing inequalities of Luedtke (2014) and Liu et al. (2016) are
+generated from the so-called mixing set and involve the scenario variables. However, the proposed
+lifted cover inequalities are derived from the polytope induced by the probabilistic constraint and
+do not involve the scenario variables, rendering them able to be embedded in the proposed BD
+algorithms.
+An extended abstract of this paper can be found in 2024 INFORMS Optimization Society
+(IOS) conference (Chen et al., 2024). Compared to its conference version, this paper investigates
+the polyhedral structures of the 0-1 sets arising in PSCPs with and without a block structure of
+ξ, and develops strong valid inequalities to improve the computational performance of the BD
+algorithms for solving PSCPs. Moreover, extensive computational results are also reported in this
+paper.
+The rest of the paper is organized as follows. Section 2 presents the mathematical formulations for (PSCP) and (PSCP’), and provides a favorable property for the formulations. Section 3
+develops the BD algorithms for solving the two formulations. Section 4 derives the strong valid inequalities to improve the performance of the BD algorithms. Section 5 presents the computational
+results. Finally, Section 6 draws the conclusion.
+
+2
+
+Mathematical formulations
+
+Consider (PSCP) with an (arbitrary) finite discrete distribution of the random vector ξ, that is,
+there exist finitely many scenarios ξ1 , . . . , ξs ∈ {0, 1}m such that P{ξ = ξi } = pi for i ∈ [s] and
+P
+s
+i=1 pi = 1. We introduce for each k ∈ [m], a binary variable vk , where vk = 1 guarantees
+Ak x ≥ 1, and for each i ∈ [s], a binary variable zi , where zi = 1 guarantees v ≥ ξi . Then (PSCP)
+can be formulated as the following MIP formulation (Luedtke and Ahmed, 2008):
+
+min c⊤ x : (1)–(4) ,
+(MIP)
+where
+Ax ≥ v,
+vk ≥ zi , ∀ k ∈ [m], i ∈ Sk ,
+s
+X
+pi zi ≥ 1 − ϵ,
+
+(1)
+(2)
+(3)
+
+i=1
+
+x ∈ {0, 1}n , v ∈ {0, 1}m , z ∈ {0, 1}s .
+
+(4)
+
+Here, Sk = {i ∈ [s] : ξik = 1}, k ∈ [m]. Constraints (2)–(4) ensure P{v ≥ ξ} ≥ 1 − ϵ. Note that if
+ξi = 0 for some i ∈ [s], we can set zi = 1 and S
+remove variable zi from the formulation. Therefore,
+we can assume ξi ̸= 0 for all i ∈ [s] and thus k∈[m] Sk = [s] in the following.
+4
+
+For problem (PSCP’) (i.e., problem (PSCP) with
+Psa block structure of ξ) with a finite discrete
+t
+t
+t
+distribution of ξ : P{ξ = ξi } = pit for i ∈ [s] and i=1 pit = 1 (for simplicity of exposition, here
+we assume that the numbers of scenarios of ξ t are identical for all t ∈ [T ]; the extension to the
+case that the numbers of scenarios of ξ t are different for different t is straightforward), a similar
+convex MINLP problem can be presented as follows:
+
+min c⊤ x : (1), (5)–(7) ,
+(MINLP)
+where
+vk ≥ zit , ∀ t ∈ [T ], k ∈ Mt , i ∈ Skt ,
+!
+s
+T
+X
+X
+ηt ≤ ln
+pit zit , ∀ t ∈ [T ],
+ηt ≥ ln(1 − ϵ),
+
+(5)
+(6)
+
+t=1
+s×T
+
+i=1
+n
+
+x ∈ {0, 1} , v ∈ {0, 1}m , z ∈ {0, 1} , η ∈ RT .
+(7)
+S
+t
+Here, Skt = {i ∈ [s] : ξik
+= 1} (similarly, we assume k∈Mt Skt = [s]); variable ηt represents the
+t
+value of ln(P{v t ≥ ξQ
+}), where v t is a subvector of v formed by the rows in Mt ; and constraints
+(5)–(7) ensure that Tt=1 P{v t ≥ ξ t } ≥ 1 − ϵ.
+Q
+Remark 2.1. By Tt=1 P{v t ≥ ξ t } ≥ 1 − ϵ, P{v t ≥ ξ t } ≥ 1 − ϵ must hold for all t ∈ [T ]. As a
+result, for any feasible solution (x, v, z, η) of problem (MINLP), it follows
+s
+X
+
+pit zit ≥ 1 − ϵ, ∀ t ∈ [T ].
+
+(8)
+
+i=1
+
+Note that if the random vector ξ does not have a finite discrete distribution, both problems
+(MIP) and (MINLP) can be seen as approximations of problem (PSCP) in the context of the SAA
+approach, where {ξi }i∈[s] and {ξit }(i,t)∈[s]×[T ] are independent Monte Carlo samples of the random
+vector ξ. When the number of blocks T is equal to one, problems (MIP) and (MINLP) with the
+same samples (i.e., ξi = ξi1 for all i ∈ [s]) are equivalent. However, when the number of blocks T is
+h
+i
+⊤ ⊤
+⊤
+larger than one, the two problems with the same random samples (i.e., ξi = (ξi1 ) , . . . , (ξiT )
+for
+all i ∈ [s]) are not equivalent in general as the random vector ξ with a finite discrete distribution,
+obtained from Monte Carlo sampling, may not have an independent block structure; see Online
+Appendix B for an illustrative example. In Section 5.5, we will perform computational experiments
+to compare the performance of the two approximations.
+Although problems (MIP) and (MINLP) can be solved to optimality by the state-of-the-art
+MIP/MINLP solvers, the potentially huge numbers of scenario variables z and related constraints
+make this approach only able to solve moderate-sized instances. Indeed,
+Pm for problem (MIP), the
+numbers of variables and constraints are m + n + s and m + 1 + k=1 |Sk |, respectively; for
+problem
+the numbers of variables and constraints are m + n + (s + 1)T and m + T + 1 +
+PT P (MINLP),
+t
+|S
+|,
+respectively.
+To alleviate the computational difficulty, Lejeune (2008); Lejeune
+t
+k
+t=1
+k∈M
+and Noyan (2010); Luedtke and Ahmed (2008) proposed a preprocessing technique to reduce the
+numbers of
+P variables and constraints in problem (MIP). In particular, for problem (MIP), if
+p(Sk ) := i∈Sk pi > ϵ, then it follows from (2) and (3) that vk = 1 must hold and the related
+constraints vk ≥ zi for i ∈ Sk can be removed from (2). The preprocessing technique can also
+be extended to problem (MINLP). Unfortunately, the numbers of variables and constraints after
+5
+
+preprocessing can still grow linearly with the number of scenarios, making it challenging to solve
+problems with a huge number of scenarios. For problem (MINLP), Saxena et al. (2010) proposed
+an equivalent MIP reformulation in the space of x and v. However, the problem size of this MIP
+reformulation depends on the number of the so-called (1 − ϵ)-efficient (and -inefficient) points,
+which generally grows exponentially with the block sizes of {ξ t }.
+To overcome the above weakness, we will develop an efficient BD approach in Section 3,
+which is based on a favorable property of the two formulations, detailed as follows. Let (MIP’)
+(respectively, (MINLP’)) be the relaxation of problem (MIP) (respectively, (MINLP)) obtained
+by removing the integrality constraints z ∈ {0, 1}s (respectively, z ∈ {0, 1}s×T ) and replacing the
+integrality constraints v ∈ {0, 1}m by v ≤ 1. The following proposition shows that this operation
+does not change the optimal values of problems (MIP) and (MINLP).
+Proposition 2.2. Problems (MIP) and (MINLP) are equivalent to (MIP’) and (MINLP’), respectively, in terms of sharing the same optimal values.
+Proof. Proof Let oMIP and oMIP’ be the optimal values of problems (MIP) and (MIP’). Clearly,
+oMIP’ ≤ oMIP . To prove the other direction, suppose that (x, v, z) is an optimal solution of (MIP’).
+Let v̄ and z̄ be defined by v̄ = min{Ax, 1} ∈ {0, 1}m and z̄i = mink∈Mi v̄k ∈ {0, 1}, where
+Mi = {k ∈ [m] : i ∈ Sk }, i ∈ [s]. By (1), it follows v ≤ min{Ax, 1} = v̄, and by (2), it
+follows zi ≤ mink∈Mi vk ≤ mink∈Mi v̄k = z̄i . Thus (x, v̄, z̄) must be a feasible solution of problem
+(MIP). As a result, oMIP = c⊤ x ≤ oMIP’ . This shows that oMIP = oMIP’ and the equivalence of
+problems (MIP) and (MIP’). The proof for the equivalence of problems (MINLP) and (MINLP’)
+is analogous.
+Although the integrality constraints v ∈ {0, 1}m can be relaxed into v ≤ 1, Luedtke and Ahmed
+(2008) noted that leaving v ∈ {0, 1}m in problem (MIP) enables B&C solvers to favor branching
+on variables v and effectively improves the overall performance. Our preliminary experiments
+also justified this statement (for both (MIP’) and (MINLP’)). Due to this, we decide to leave the
+integrality constraints v ∈ {0, 1}m in the two formulations.
+
+3
+
+Benders decomposition
+
+In this section, we first review the (generalized) BD approach for generic convex MINLPs and
+then apply the BD approach to formulations (MIP) and (MINLP) of PSCPs.
+
+3.1
+
+Benders decomposition for convex MINLPs
+
+Here we briefly review the (generalized) BD algorithm for convex MINLPs. For more details, we
+refer to Geoffrion (1972); Bonami et al. (2012); Belotti et al. (2013). We consider a convex MINLP
+of the form
+
+min c⊤ x : gℓ (x, y) ≤ 0, ∀ ℓ ∈ [L], Ax ≥ b, x ∈ Zp × Rn−p , y ∈ Rτ ,
+(9)
+where g1 (x, y), . . . , gL (x, y) are convex and twice differentiable functions. The objective function in
+(9) is a linear function of variables x, as this will be the case in the context of solving formulations
+(MIP) and (MINLP). Notice that, however, convex MINLP problems with a general convex and
+twice differentiable objective function f (x, y) of variables x and y can also be tackled by the BD
+algorithm (Geoffrion, 1972; Bonami et al., 2012; Belotti et al., 2013).
+6
+
+Let X = {x ∈ Zp × Rn−p : Ax ≥ b} and Y(x) = {y ∈ Rτ : gℓ (x, y) ≤ 0, ∀ ℓ ∈ [L]}. Problem
+(9) can be formulated as the master problem in the x space:
+
+min c⊤ x : Ψ(x) ≤ 0, x ∈ X ,
+(10)
+where
+(
+Ψ(x) = min
+
+)
+X
+
+wℓ rℓ : gℓ (x, y) ≤ 0, ∀ ℓ ∈ L, gℓ (x, y) ≤ rℓ , rℓ ≥ 0, ∀ ℓ ∈ L⊥
+
+(11)
+
+ℓ∈L⊥
+
+is a convex function measuring the infeasibility of gℓ (x, y), ℓ ∈ [L], at point x (if Y(x) = ∅). Here
+wℓ > 0, ℓ ∈ L⊥ , are the weights that can be chosen to reduce to, e.g., || · ||1 norm minimization.
+For simplicity, we assume that L ⊆ [L] is the set of constraints that can be satisfied at all x ∈ X ,
+and its complement L⊥ is the set of constraints that can possibly be violated at some x ∈ X .
+The master problem (10) can be solved as an MIP problem by a linear programming (LP)
+based B&C approach in which linear outer approximations of the nonlinear constraint Ψ(x) ≤ 0,
+called (generalized) Benders feasibility cuts, are separated on the fly. In particular, let x∗ be a
+solution of the LP relaxation of the current master problem. Due to the convexity, Ψ(x) can be
+underestimated by a supporting hyperplane Ψ(x∗ ) + µ(x∗ )⊤ (x − x∗ ), so we obtain the following
+Benders feasibility cut
+0 ≥ Ψ(x∗ ) + µ(x∗ )⊤ (x − x∗ ),
+(12)
+where
+∗
+
+µi (x ) =
+
+L
+X
+
+u∗ℓ
+
+ℓ=1
+
+∂gℓ (x∗ , y ∗ )
+, ∀ i ∈ [n],
+∂xi
+
+(13)
+
+y ∗ and u∗ are optimal primal and Lagrangian dual solutions of the convex problem (11) with
+x = x∗ , derived using the Karush-Kuhn-Tucker (KKT) conditions; see Geoffrion (1972); Bonami
+et al. (2012); Belotti et al. (2013) for more details.
+Two remarks on the above BD algorithm are in order. First, if problem (11) can be decomposed
+into several subproblems, then we can construct a Benders feasibility cut for each subproblem. In
+this case, to speed up the convergence of the algorithm, we can implement a multi-cut version of
+the BD algorithm (Rahmaniani et al., 2017), where in each iteration, multiple Benders feasibility
+cuts will be (possibly) added, each of which corresponds to a subproblem. Second, if L⊥ = {ℓ′ } is
+a singleton (which will be considered in the context of solving formulations (MIP) and (MINLP)),
+we can set wℓ′ = 1 and solve an equivalent problem:
+Ψ(x) = min {gℓ′ (x, y) : gℓ (x, y) ≤ 0, ∀ ℓ ∈ [L]\{ℓ′ }} .
+
+(14)
+
+The Benders feasibility cut (12) can then be adapted as
+0 ≥ Ψ(x∗ ) + µ(x∗ )⊤ (x − x∗ ),
+where
+µi (x∗ ) =
+
+∂gℓ′ (x∗ , y ∗ )
++
+∂xi
+
+X
+ℓ∈[L]\{ℓ′ }
+
+u∗ℓ
+
+∂gℓ (x∗ , y ∗ )
+, ∀ i ∈ [n],
+∂xi
+
+(15)
+
+(16)
+
+y ∗ and u∗ are optimal primal and Lagrangian dual solutions of the convex problem (14) with
+x = x∗ .
+7
+
+3.2
+
+Benders decomposition for generic PSCPs
+
+Now, we apply the BD approach to formulation (MIP) of the PSCP with a finite discrete distribution of ξ. From Proposition 2.2, we project the z variables out from the formulation and obtain
+the master problem
+
+(17)
+min c⊤ x : Ax ≥ v, Ψ(v) ≤ 0, (x, v) ∈ {0, 1}n+m .
+For a solution v ∗ ∈ [0, 1]m (encountered in the B&C search tree of the BD algorithm), there always
+exists a feasible solution z ∗ satisfying (2), and thus Ψ(v ∗ ) can be presented as follows:
+(
+)
+s
+X
+Ψ(v ∗ ) = min (1 − ϵ) −
+(18)
+pi zi : zi ≤ vk∗ , ∀ k ∈ [m], i ∈ Sk .
+i=1
+
+Note that as shown in Proposition 2.2, it is also possible to project the v variables out from the
+formulation. However, based on our computational experience, leaving the v variables (whose
+number m is generally not large) in the master problem makes the BD algorithm converge much
+faster, and thus improves the overall performance.
+Let uki be the dual variable associated with constraint zi ≤ vk∗ in problem (18), and {u∗ki } be
+an optimal dual solution of problem (18). Hence, the Benders feasibility cut (15) reduces to
+∗
+
+0 ≥ Ψ(v ) −
+
+m X
+X
+
+u∗ki (vk − vk∗ ).
+
+(19)
+
+k=1 i∈Sk
+
+Next, we derive a closed formula for the Benders feasibility cut (19) using primal and dual
+optimal solutions of problem (18). The Lagrangian function corresponding to problem (18) reads
+L(z, u) = (1 − ϵ) −
+
+s
+X
+
+pi zi +
+
+i=1
+
+m X
+X
+
+uki (zi − vk∗ ).
+
+(20)
+
+k=1 i∈Sk
+
+Without loss of generality, we assume that values {vk∗ }k∈[m] are sorted nondecreasingly, i.e., v1∗ ≤
+∗
+· · · ≤ vm
+. Let Mi = {k ∈ [m] : i ∈ Sk }. Then an optimal solution for problem (18) is given by
+zi∗ = min vk∗ = vk∗i , where ki = min {k : i ∈ Sk } , ∀ i ∈ [s].
+k∈Mi
+
+(21)
+
+Substituting z ∗ into the KKT system
+X
+∂L(z, u)
+= −pi +
+uki = 0, ∀ i ∈ [s],
+∂zi
+k∈M
+i
+
+uki ≥ 0,
+
+zi ≤ vk∗ ,
+
+uki (zi − vk∗ ) = 0, ∀ k ∈ [m], i ∈ Sk ,
+
+we derive an optimal dual solution u∗ as follows:
+(
+pi , if k = ki ;
+u∗ki =
+∀ i ∈ [s], k ∈ Mi .
+(22)
+0,
+otherwise,
+P
+Plugging Ψ(v ∗ ) = 1 − ϵ − si=1 pi vk∗i and u∗ into (19) and regrouping the terms, we obtain the
+Benders feasibility cut
+m
+X
+p(Sk \S[k−1] )vk ≥ 1 − ϵ.
+(23)
+k=1
+
+8
+
+S
+P
+Here S[k−1] = k′ ∈[k−1] Sk′ , S[0] = ∅, and p(Sk \S[k−1] ) =
+i∈Sk \S[k−1] pi for k ∈ [m]. Given a
+∗
+m
+solution v ∈ [0, 1] , the above procedure for the separation
+of the Benders feasibility cuts can
+P
+be implemented with the complexity of O(m log m + k∈[m] |Sk |), where O(m log m) is taken by
+sorting {vk∗ }k∈[m] .
+
+3.3
+
+Benders decomposition for PSCPs with a block structure of ξ
+
+In this subsection, we apply the BD approach to formulation (MINLP) of the PSCP with a block
+structure of ξ. Similarly, we project the z variables out from the formulation and obtain the master
+problem
+(
+min c⊤ x : Ax ≥ v,
+
+T
+X
+
+)
+ηt ≥ ln(1 − ϵ), Ψt (v t , ηt ) ≤ 0, ∀ t ∈ [T ], (x, v) ∈ {0, 1}n+m , η ∈ RT
+
+, (24)
+
+t=1
+
+where for a solution (v ∗ , η ∗ ) ∈ [0, 1]m × RT , the Benders subproblem (11) can be decomposed into
+T subproblems {Ψt ((v t )∗ , ηt∗ )}t∈[T ] given by
+(
+!
+)
+s
+X
+Ψt ((v t )∗ , ηt∗ ) = min ηt∗ − ln
+pit zit : zit ≤ vk∗ , ∀ k ∈ Mt , i ∈ Skt , ∀ t ∈ [T ].
+(25)
+i=1
+
+Let mt = |Mt | and Mti = {k ∈ Mt : i ∈ Skt }. Without loss of generality, we assume
+∗
+. To derive the Benders feasibility cut, let us first consider the case
+Mt = [mt ] and v1∗ ≤ · · · ≤ vm
+t
+∗
+t
+that mink∈Mi vk > 0 holds for some i ∈ [s]. In this case, Ψt ((v t )∗ , ηt∗ ) < +∞ is well-defined and
+an optimal solution of problem (25) is given by
+
+zit∗ = mint vk∗ = vk∗i , where ki = min k : i ∈ Skt , ∀ i ∈ [s].
+(26)
+k∈Mi
+
+Let uki be the dual variable associated with constraint zit ≤ vk∗ in problem (25), and {u∗ki } is an
+optimal dual solution of problem (25). Then the Benders feasibility cut (15) can be written as
+X X
+u∗ki (vk − vk∗ ).
+(27)
+0 ≥ Ψt ((v t )∗ , ηt∗ ) + (ηt − ηt∗ ) −
+k∈Mt i∈Skt
+
+Next, we provide a closed formula for the Benders feasibility cut (27) using primal and dual
+optimal solutions of problem (25). The Lagrangian function corresponding to problem (25) reads
+!
+s
+X
+X X
+uki (zit − vk∗ ).
+(28)
+L(z·t , u) = ηt∗ − ln
+pit zit +
+k∈Mt i∈Skt
+
+i=1
+
+Substituting z·t∗ (defined in (26)) into the following KKT system
+X
+∂L(z·t , u)
+−pit
+= Ps
++
+uki = 0, ∀ i ∈ [s],
+∂zit
+i=1 pit zit
+t
+k∈Mi
+
+uki ≥ 0,
+
+zit ≤ vk∗ ,
+
+uki (zit − vk∗ ) = 0, ∀ k ∈ Mt , i ∈ Skt ,
+
+we can see that u∗ defined by
+( pit
+s
+X
+, if k = ki ;
+δt
+u∗ki =
+∀ i ∈ [s], k ∈ Mti , where δt =
+pit vk∗i ,
+0,
+otherwise,
+i=1
+9
+
+(29)
+
+
+Ps
+∗
+∗
+is an optimal dual solution. Substituting u∗ and Ψt ((v t )∗ , ηt∗ ) = ηt∗ − ln
+p
+v
+it
+ki = ηt − ln δt
+i=1
+into (27) and regrouping the terms, the Benders feasibility cut (27) becomes
+mt
+X
+
+t
+p(Skt \S[k−1]
+)vk ≥ δt (ηt + 1 − ln δt ),
+
+(30)
+
+k=1
+t
+t
+t
+t
+pit for k ∈ Mt .
+t
+i∈Skt \S[k−1]
+k′ ∈[k−1] Sk′ , S[0] = ∅, and p(Sk \S[k−1] ) =
+Next, we consider the case that mink∈Mti vk∗ = 0 holds for all i ∈ [s]. In this case, zit = 0 must
+hold for all i ∈ [s] for any feasible solution z·t of problem (25), and thus Ψt ((v t )∗ , ηt∗ ) = +∞ is not
+
+t
+=
+where S[k−1]
+
+P
+
+S
+
+well-defined. To bypass this difficulty, we use (5), (7), and (8) to derive a valid inequality cutting
+off point (v ∗ , η ∗ ). Specifically, from Remark 2.1, Ψ′t (v t ) ≤ 0, t ∈ [T ], hold for all feasible solutions
+(v, η) of problem (24), where for a solution (v ∗ , η ∗ ) ∈ [0, 1]m × RT , {Ψ′t ((v t )∗ )}t∈[T ] are given by
+(
+)
+s
+X
+(31)
+Ψ′t ((v t )∗ ) = min 1 − ϵ −
+pit zit : zit ≤ vk∗ , ∀ k ∈ Mt , i ∈ Skt , ∀ t ∈ [T ].
+i=1
+
+Using the result in Section 3.2, we can derive the Benders feasibility cut (corresponding to Ψ′t (v t ) ≤
+0)
+mt
+X
+t
+p(Skt \S[k−1]
+)vk ≥ 1 − ϵ,
+(32)
+k=1
+
+which cuts off point (v , η ) (as mink∈Mti vk∗ = 0 holds for all i ∈ [s]).
+m
+T
+For a solution (v ∗ , η ∗ ) ∈
+Benders feasibility cuts (30) or (32) can be separated
+P[0, 1] × R , the P
+with the complexity of O( t∈[T ] (mt log mt + k∈[mt ] |Skt |)), where O(mt log mt ) is taken by sorting
+{vk∗ }k∈Mt . It is worthwhile remarking that unlike the BD algorithm for formulation (MIP) in which
+at most one cut is added in one iteration, we can add up to T cuts in one iteration in the BD
+algorithm for formulation (MINLP). This feature renders the BD algorithm able to converge more
+quickly when solving (MINLP), especially when the number of blocks is large; see Section 5.5
+further ahead.
+∗
+
+4
+
+∗
+
+Strong valid inequalities
+
+To further speed up the convergence of the B&C algorithm based on Benders feasibility cuts, here
+we investigate the polyhedral structure conv(X ), where
+X = {v ∈ {0, 1}m : P{v ≥ ξ} ≥ 1 − ϵ} ,
+
+(33)
+
+and develop strong valid inequalities for conv(X ). For the case of a finite discrete distribution of
+ξ and its special case with a block structure, X reduces to X g = Projv (Y g ) and X b = Projv (Y b ),
+where
+(
+)
+s
+X
+Y g = (v, z) ∈ {0, 1}m+s : vk ≥ zi , ∀ k ∈ [m], i ∈ Sk ,
+pi zi ≥ 1 − ϵ ,
+i=1
+
+(
+Yb =
+
+(v, z, η) ∈ {0, 1}m+sT × RT : vk ≥ zit , ∀ t ∈ [T ], k ∈ Mt , i ∈ Skt ,
+ηt ≤ ln
+
+s
+X
+i=1
+
+10
+
+!
+pit zit , ∀ t ∈ [T ],
+
+T
+X
+t=1
+
+)
+ηt ≥ ln(1 − ϵ) .
+
+Observe that the Benders feasibility cuts (23) and (32) are valid for linear relaxations of X g and
+X (obtained by relaxing integrality constraints on variables v in X g and X b , respectively), and
+g
+b
+thus also valid
+up the Benders feasibility cuts
+PT (30) for all t ∈ [T ]
+PT for X and X . Similarly, summing
+PT 1 P
+mt
+t
+t
+and using t=1 ηt ≥ ln(1 − ϵ), we obtain t=1 δt k=1 p(Sk \S[k−1] )vk ≥ T − t=1 ln δt + ln(1 − ϵ),
+which is valid for the linear relaxation of X b and thus also valid for X b . Different from the
+Benders feasibility cuts that only lead to (potentially weak) inequalities that are valid for the
+linear relaxation of X g or X b , the valid inequalities developed in this section will explicitly take
+the integrality constraints on variables v into consideration, and are strong (facet-defining) valid
+inequalities for conv(X g ) and conv(X b ).
+b
+
+4.1
+
+Lifted cover inequalities for conv(X )
+
+In this subsection, we provide a general procedure for deriving strong valid inequalities for conv(X ).
+Throughout, we assume that P{v ≥ ξ} can be efficiently computed for any v ∈ {0, 1}m . This
+assumption is reasonable for the two special cases X g and X b (as ξ and {ξ t }t∈[T ] have finite
+discrete distributions, respectively).
+Given a subset C ⊆ [m], let vC and ξC be the subvectors of v and ξ formed by the rows in C,
+respectively, and define
+λ(C) = P{0 ≱ ξC }.
+(34)
+Observe that λ(C) is a nondecreasing set function with respect to C, which is equal to the probability P{vC ≱ ξC } when vC = 0, i.e., vk = 0 holds for all k ∈ C. If this probability is larger than
+the confidence parameter ϵ, the probabilistic constraint P{v ≥ ξ} ≥ 1 − ϵ with vC = 0 cannot be
+satisfied as P{v ≥ ξ} ≤ P{vC ≥ ξC } = 1 − P{vC ≱ ξC } = 1 − P{0 ≱ ξC } < 1 − ϵ. Therefore, to
+ensure that the probabilistic constraint P{v ≥ ξ} ≥ 1 − ϵ is satisfied, vk = 0, k ∈ C, cannot be
+simultaneously satisfied. This motivates the following definition of cover.
+Definition 4.1. A subset C ⊆ [m] is a cover for X if λ(C) > ϵ. It is minimal if and only if
+λ(C\{k}) ≤ ϵ holds for all k ∈ C.
+By definition, if C is a cover, then the cover inequality
+X
+vk ≥ 1
+
+(35)
+
+k∈C
+
+is valid for X . Moreover, letting C be the set of all minimal covers, then X = {v ∈ {0, 1}m :
+P
+k∈C vk ≥ 1, ∀ C ∈ C}, that is, all cover inequalities provide a linear description of X .
+Let X (C) = {v ∈ X : vk = 1, ∀ k ∈ [m]\C}, obtained by fixing vk = 1 for all k ∈ [m]\C
+in X . The minimal cover inequality (35) is strong with respect to conv(X (C)); indeed, it is
+facet-defining for conv(X (C)). In general, however, the cover inequality (35) could be weak with
+respect to conv(X ). To overcome the weakness, we use the sequential lifting technique (Wolsey,
+1976; Richard, 2011) to convert inequality (35) into a strong facet-defining inequality for conv(X ).
+Sequential lifting is a procedure in which the projected variables vk , k ∈ [m]\C, are introduced
+into the inequality (35) one at a time in some lifting order ℓ1 , . . . , ℓm−|C| (this order is also known
+as lifting sequence). More precisely, let
+X
+X
+vk +
+αk (vk − 1) ≥ 1
+(36)
+k∈C
+
+k∈Lp−1
+
+11
+
+be a so-far generated inequality for X (C ∪ Lp−1 ), where αk ’s are the lifting coefficients and Lp−1 :=
+{ℓ1 , . . . , ℓp−1 }. To lift variable vℓp , i.e., find the largest lifting coefficient αℓp such that inequality
+X
+
+X
+
+vk + αℓp (vℓp − 1) +
+
+k∈C
+
+αk (vk − 1) ≥ 1
+
+is valid for X (C ∪ Lp ), it suffices to solve the following lifting problem
+
+
+X
+
+X
+vk +
+αℓp =
+min
+αk (vk − 1) − 1 : P{vC∪Lp ≥ ξC∪Lp } ≥ 1 − ϵ, vℓp = 0 .
+
+v∈{0,1}|C∪Lp | 
+k∈C
+
+(37)
+
+k∈Lp−1
+
+(38)
+
+k∈Lp−1
+
+Repeating the above lifting procedure until p = m − |C|, we obtain the lifted cover inequality
+X
+X
+vk +
+αk (vk − 1) ≥ 1,
+(39)
+k∈C
+
+k∈[m]\C
+
+which depends on the lifting order ℓ1 , . . . , ℓm−|C| ; that is, different lifting orders of [m]\C may lead
+to different lifted cover inequalities. Since the minimal cover inequality (35) defines a facet of
+conv(X (C)), it follows from Wolsey (1976) that the lifted cover inequality (39) defines a facet of
+conv(X ).
+Lemma 4.2 (Wolsey (1976)). For 1 ≤ p ≤ m−|C|, inequality (36) defines a facet of the polyhedron
+conv(X (C ∪ Lp−1 )). In particular, the lifted cover inequality (39) defines a facet of the polyhedron
+conv(X ).
+The above procedure lifts variables fixed at 1 into a known inequality, called down-lifting
+procedure in the literature (Gu et al., 1998). In addition to this, we can also use the up-lifting
+procedure, where variables are allowed to be fixed at 0 and introduced to the inequality; see Gu
+et al. (1998) and Song et al. (2014); Wang et al. (2021) for similar lifting procedures arising in
+deterministic and probabilistic knapsack polytopes, respectively. In particular, let C, N0 , and N1
+be a partition of [m], where N0 and N1 are the sets of variables fixed at 0 and 1, respectively,
+and C is a minimal cover of X ∩ {v : vk = 0, ∀ k ∈ N0 } ∩ {v : vk = 1, ∀ k ∈ N1 } (that is,
+λ(C ∪ N0 ) > ϵ and λ(C ∪ N0 \{k}) ≤ ϵ for all k ∈ C). The lifted cover inequality can then be
+written as
+X
+X
+X
+vk +
+αk vk +
+αk (vk − 1) ≥ 1,
+(40)
+k∈C
+
+k∈N0
+
+k∈N1
+
+where the lifting coefficients αk for k ∈ N0 ∪ N1 are computed in a similar manner.
+Given a point v ∗ ∈ [0, 1]m encountered in the B&C algorithm (of solving the Benders reformulation of problems (MIP) and (MINLP)), the separation problem of the lifted cover inequalities
+(40) asks to either find an inequality violated by point v ∗ or prove v ∗ ∈ conv(X ). To solve the
+separation problem, we first apply a heuristic procedure to identify a minimal cover. In particular, we let C := {k ∈ [m] : vk∗ = 0} and check whether C is a cover; if so, we stop immediately
+with a cover inequality (35) violated by v ∗ . Otherwise, let F := {k ∈ [m] : 0 < vk∗ < 1} and
+k1 , k2 , . . . , k|F | be a permutation of F such that vk∗1 ≤ vk∗2 ≤ · · · ≤ vk∗|F | . Then for ℓ = 1, . . . |F|,
+we iteratively add the vk∗ℓ into C until C is a cover. Observe that the resultant cover C may not
+be minimal, so we iteratively remove elements from C in a nonincreasing order of values {vk∗ }k∈C
+until it becomes a minimal cover.
+12
+
+Now, if |C ∩ F| ≤ 1, then we lift from the cover inequality v(C) ≥ 1 and perform a downlifting procedure on variables {vk }k∈[m]\C to obtain a lifted cover inequality (39). We lift variables
+{vk }k∈[m]\C in a nondecreasing order of {vk∗ }k∈[m]\C , since the earlier a variable is lifted, the larger
+the lifting coefficient will be. If |C ∩ F| ≥ 2, we follow Gu et al. (1998); Song et al. (2014); Wang
+et al. (2021) to use a three-phase lifting procedure to obtain a lifted cover inequality. Specifically,
+letting C1 := {k ∈ C : vk∗ > 0}, C2 := {k ∈ C : vk∗ = 0}, and N1 = {k ∈ [m] : vk∗ = 1}, then
+we start from the cover inequality v(C1 ) ≥ 1, perform (i) a down-lifting procedure on variables
+{vk }k∈[m]\(C∪N1 ) , (ii) an up-lifting procedure on variables {vk }k∈C2 , and (iii) a down-lifting procedure
+on variables {vk }k∈N1 . Similarly, when lifting variables {vk }k∈[m]\(C∪N1 ) , we use a nondecreasing
+order of {vk∗ }k∈[m]\C , as to obtain a violated lifted cover inequality. However, as the lifting of
+variables {vk }k∈C2 and {vk }k∈N1 does not contribute to the violation of the lifted cover inequality,
+we simply use a variable
+P index order instead. This also implies that we can abandon the lifting
+procedure if v(C1 ) + k∈[m]\(C∪N1 ) αk (vk − 1) ≥ 1 is not violated by v ∗ , thereby avoiding further
+unnecessary computational effort.
+
+4.2
+
+Lifted cover inequalities for conv(X g )
+
+Letting SC =
+
+S
+
+k∈C Sk , then for X
+
+g
+
+, λ(C) defined in (34) reduces to
+
+λ(C) = P{0 ≱ ξC } =
+
+X
+
+pi χ(0 ≱ ξi,C ) =
+
+X
+
+pi = p(SC ),
+
+(41)
+
+i∈SC
+
+i∈[s]
+
+where χ(·) is an indicator function. Thus, a subset C ⊆ [m] is a cover for X g if p(SC ) > ϵ, and it
+is minimal if and only if p(SC\{k} ) ≤ ϵ holds for all k ∈ C. In addition, the lifting problem in (38)
+reduces to
+X
+X
+vk +
+αk (vk − 1) − 1
+(42a)
+αℓp = min
+k∈C
+
+k∈Lp−1
+
+s.t. vk ≥ zi , ∀ k ∈ C ∪ Lp−1 , i ∈ Sk ,
+s
+X
+pi zi ≥ 1 − ϵ, zi = 0, ∀ i ∈ Sℓp ,
+
+(42b)
+(42c)
+
+i=1
+
+vC∪Lp−1 ∈ {0, 1}|C∪Lp−1 | , z ∈ {0, 1}s .
+
+(42d)
+
+Problem (42) is a precedence constrained knapsack problem, which is strongly NP-hard (Johnson
+and Niemi, 1983), making it challenging to design an empirically efficient algorithm (e.g., a pseudopolynomial time algorithm) to solve it. To resolve the difficulty, we follow Espinoza et al. (2015)
+to solve its LP relaxation
+X
+X
+α̂ℓp = min
+vk +
+αk (vk − 1) − 1
+k∈C
+k∈Lp−1
+(43)
+|C∪Lp−1 |
+s
+s.t. (42b), (42c), vC∪Lp−1 ∈ [0, 1]
+, z ∈ [0, 1] ,
+to derive a lower bound α̂ℓp for the lifting coefficient αℓp , thereby also obtaining a valid lifted cover
+inequality for conv(X g ). Moreover, the above approximation lifting problem (43) can be solved
+using the customized algorithm of Chicoisne et al. (2012) with thePcomplexity of O(nγ log n),
+where n = |C ∪ Lp−1 | + s is the number of variables in (43) and γ = k∈C∪Lp−1 |Sk | is the number
+13
+
+of constraints in (42b). Based on our computational experience, this customized algorithm is much
+more efficient than the direct use of an LP solver.
+Note that in contrast to the optimal value of the exact lifting problem (42), which is nonnegative
+and integral, the optimal value of the approximation lifting problem (43), however, could be
+negative and fractional. To overcome this weakness and obtain a stronger approximation lifting
+coefficient, we can use max{⌈α̂ℓp ⌉, 0} as the lifting coefficient instead of α̂ℓp .
+
+4.3
+
+Lifted cover inequalities for conv(X b )
+
+S
+P
+Given a subset C ⊆ [m], let C t := C ∩Mt , SC t = k∈C t Skt , and p·t (SC t ) := i∈S t pit , where t ∈ [T ].
+C
+P
+Similar to (41), p·t (SC t ) := i∈S t pit denotes the probability P{0 ≱ ξC t }. Thus, λ(C) defined in
+C
+(34) reduces to
+T
+(a) Y
+
+λ(C) = P{0 ≱ ξC } =
+
+P{0 ≱ ξC t } =
+
+t=1
+
+T X
+Y
+
+pit =
+
+t=1 i∈SC t
+
+T
+Y
+
+p·t (SC t ),
+
+(44)
+
+t=1
+
+where (a) follows from the fact that the random vectors ξC 1 , . . . , ξC T are independent (as ξ 1 , . . . , ξ T
+are independent and ξC 1 , . . . , ξC T are subvectors of ξ 1 , . . . , ξ T ). Thus, we can use (44) to determine
+whether C is a (minimal) cover. In addition, letting t0 ∈ [T ] be such that ℓp ∈ Mt0 , then the
+lifting problem in (38) reduces to
+X
+X
+vk +
+αk (vk − 1) − 1
+(45a)
+αℓp = min
+k∈C
+
+k∈Lp−1
+
+s.t. vk ≥ zit , ∀ t ∈ [T ], k ∈ C ∪ Lp−1 , i ∈ Skt ,
+!
+s
+T
+X
+X
+ηt ≤ ln
+pit zit , ∀ t ∈ [T ],
+ηt ≥ ln(1 − ϵ),
+t=1
+s×T
+
+i=1
+
+vC∪Lp−1 ∈ {0, 1}|C∪Lp−1 | , z ∈ {0, 1}
+
+, zit0 = 0, ∀ i ∈ Sℓtp0 .
+
+(45b)
+(45c)
+(45d)
+
+Note that different from problem (42) which is an MIP problem, the lifting problem
+P (45) is a
+relatively difficult MINLP problem as it includes the nonlinear constraints ηt ≤ ln ( si=1 pit zit ) in
+(45c). In order to avoid the nonlinearity in (45), observe that
+!
+!
+T
+T
+s
+s
+T
+X
+X
+X
+(a) X X
+ln(1 − ϵ) ≤
+ηt ≤
+ln
+pit zit ≤
+pit zit − 1 ,
+t=1
+
+t=1
+
+i=1
+
+t=1
+
+i=1
+
+where (a) follows from the fact that ln(σ) ≤ σ − 1 holds for any σ ∈ (0, 1]. Thus,
+T X
+s
+X
+
+pit zit ≥ T + ln(1 − ϵ)
+
+(46)
+
+t=1 i=1
+
+is a valid (linear) inequality for problem (45). Substituting the constraints in (45c) by (46), we
+obtain an MIP relaxation of problem (45):
+X
+X
+ᾱℓp = min
+vk +
+αk (vk − 1) − 1
+k∈C
+k∈Lp−1
+(47)
+s.t. (45b), (45d), (46).
+14
+
+Observe that ᾱℓp ≤ αℓp holds, and thus solving problem (47) will obtain a valid lifting coefficient.
+Now, similar to problem (42), problem (47) is also a precedence constrained knapsack problem.
+Therefore, we can leverage the results in Section 4.2 to further derive valid lifting coefficients,
+thereby obtaining valid lifted cover inequalities for conv(X b ).
+
+4.4
+
+Clique-based inequalities
+
+As shown in Section 4.1, in order to obtain a lifted cover inequality (40) from a minimal cover
+inequality (35), one has to solve m−|C| lifting problems of the form (38), which could be computationally demanding (even though we can solve the LP relaxations to obtain valid lifting coefficients
+when ξ has a finite discrete distribution with or without a block structure). To further speed up
+the computational procedure, in this section, we will present a subclass of the lifted cover inequalities, which can be constructed without the need for the potentially computationally expensive
+lifting procedure, making them particularly suitable to be embedded in a B&C framework to solve
+the PSCP.
+To proceed, we consider a minimal cover C with size |C| = 2, which we call two-cover. The
+number of two-covers is upper bounded by O(m2 ). Therefore, by checking whether λ({j, k}) > ϵ
+holds for all pairs j, k ∈ [m] with j ̸= k (where λ(·) is defined in (34)), we can identify all two-covers
+and construct the two-cover induced graph as follows.
+Definition 4.3. A two-cover induced graph G = ([m], E) contains the edge {j, k} if and only if
+λ({j, k}) > ϵ.
+Letting C = {j, k}, then the cover inequality (35) reduces to vj +vk ≥ 1. Two-cover inequalities
+can be strengthened using the concept of cliques. More specifically, a clique with vertex set Q is
+a fully connected subgraph in G; that is, for any pair j ∈ Q and k ∈ Q\{j}, it follows {j, k} ∈ E.
+A maximal clique is a clique in graph G that cannot be extended by including any more vertices.
+For a maximal clique with vertex set Q, since at most one variable vk , k ∈ Q, can take the value
+of zero, we obtain the maximal clique inequality
+X
+vk ≥ |Q| − 1,
+(48)
+k∈Q
+
+which is valid for X and stronger than the two-cover inequalities vj + vk ≥ 1, j, k ∈ Q.
+For any maximal clique with vertex set Q, the two-cover inequality vj + vk ≥ 1 with j, k ∈ Q
+is valid for X ({j, k}). By first lifting variables {vk′ : k ′ ∈ Q\{j, k}} (with any lifting order of
+Q\{j, k}) and then lifting variables {vk′ : k ′ ∈ [m]\Q} (with any lifting order of [m]\Q), we
+can also obtain the maximal clique inequality (48). As a result, the maximal clique inequalities
+are special cases of the lifted cover inequalities in (40). Therefore, it immediately follows from
+Lemma 4.2 that
+Corollary 4.4. The maximal clique inequalities are facet-defining for conv(X ).
+Although the maximal clique inequalities are special cases of lifted cover inequalities, they are
+very attractive from a computational perspective due to the following reasons. First, compared
+with the lifted cover inequalities whose computation requires to solve m − |C| lifting problems of
+the form (38) (or their LP relaxations), the maximal clique inequalities admit a much more efficient computational procedure—one just needs to extend a clique in a graph until no more vertices
+can be included with the complexity of O(m2 ). Second, given a solution v ∗ ∈ [0, 1]m encountered
+15
+
+in the B&C algorithm (of solving the Benders reformulation of problems (MIP) and (MINLP)),
+the problem of finding a violated maximal clique inequality is equivalent to solving a maximum
+weighted clique problem (Atamtürk et al., 2000; Achterberg, 2007). Although this problem is
+NP-hard (Grötschel et al., 1993, Theorem 9.2.9), there are various effective heuristic algorithms
+for finding violated inequalities in the literature; see Atamtürk et al. (2000); Achterberg (2007);
+Burke et al. (2012); Rebennack et al. (2012); Brito and Santos (2021) among many of them. Moreover, state-of-the-art MIP solvers have implemented effective algorithms to find violated maximal
+clique inequalities, which allows us to simply state the two-cover inequalities as constraints and
+then facilitate the powerful MIP solvers’ internal separation procedure for finding violated clique
+inequalities.
+
+5
+
+Computational results
+
+In this section, we present computational results to illustrate the effectiveness of the proposed
+BD algorithms for solving PSCPs based on formulations (MIP) and (MINLP). In particular, we
+first evaluate the performance effect of the proposed lifted cover inequalities for the proposed BD
+algorithm. Then, we present computational results to show the effectiveness of the proposed BD
+algorithms over state-of-the-art approaches for solving problems (MIP) and (MINLP). Finally, we
+compare the performance of the proposed BD algorithms for solving problems (MIP) and (MINLP)
+when applying them as sample approximation problems to solve PSCPs. In Online Appendix C,
+we further present the computational results to analyze the effect of the scenario size on the quality
+of the solution returned by solving the sample approximation problem.
+
+5.1
+
+Implementation
+
+The proposed BD algorithms were implemented in Julia 1.7.3 using CPLEX 20.1.0. We use a
+branch-and-Benders-cut (B&BC) approach (Rahmaniani et al., 2017) to implement the proposed
+BD algorithms for solving the PSCPs, where the Benders feasibility cuts are separated on the
+fly at the nodes of the search tree. In addition, when using the lifted cover inequalities, we
+separate them at the root node of the search tree. This approach can be implemented via the cut
+callback framework available in modern general-purpose MIP solvers and has been widely applied
+to implement the BD algorithm for various problems; see Gendron et al. (2016); Fischetti et al.
+(2016); Bodur and Luedtke (2017); Cordeau et al. (2019) among many of them. Before starting the
+B&BC algorithm, we apply the preprocessing technique investigated in Lejeune (2008); Lejeune
+and Noyan (2010); Luedtke and Ahmed (2008) to simplify formulations (MIP) and (MINLP),
+and add all two-cover inequalities in Section 4.4 as constraints to initialize the relaxed master
+problem. Note that with the two-cover inequalities in the relaxed master problem, CPLEX can
+automatically strengthen the two-cover inequalities into a subset of maximal clique inequalities
+(48) and separate the remaining maximal clique inequalities on the fly.
+To further speed up the B&BC algorithm, we follow Fischetti et al. (2016) to implement a
+restart mechanism to increase the information available (i.e., effective cuts and heuristic solutions)
+at the root node, so that more variable fixings and generation of internal cuts will be performed
+at the root node. Specifically, before entering into the final B&C process, we terminate the
+algorithm immediately after solving the root node (through setting CPX PARAM NODELIM=1), state
+the generated Benders feasibility cuts and lifted cover inequalities, stored in our own data structure,
+as static constraints in the relaxed master problem, and update the incumbent solution. We repeat
+16
+
+the above process twice and then go to the final B&C process.
+In our experiments, the parameters of CPLEX were set to run the code in a single-threaded
+mode, with a time limit of 7200 seconds and a relative MIP gap of 0%. Unless otherwise stated,
+all other parameters in CPLEX were set to their default values. The computational experiments
+were conducted on a cluster of computers equipped with Intel(R) Xeon(R) Gold 6140 CPU @
+2.30GHz. All code and data of the experiments are available at Lv et al. (2025).
+
+5.2
+
+Testset of PSCP instances
+
+Following Saxena et al. (2010), we construct PSCP instances using the 60 deterministic SCP instances (Beasley, 1990); the numbers of rows and columns (m, n) of matrix A in these instances
+are (50, 500), (200, 1000), (200, 2000), (300, 3000), (400, 4000), (500, 5000) with the corresponding
+numbers of instances being 5, 15, 10, 10, 10, 10, respectively. Specifically, we construct instances
+with two block sizes, namely 10 and 20, and instances that do not have a block structure of the
+random variable ξ (that is, ξ has only a single block). We use two probability distributions of
+ξ called circular and star distributions (Beraldi and Ruszczyński, 2002; Saxena et al., 2010) to
+construct scenarios of {ξi } or {ξit }. For the circular distribution, the k-th entry of the random vector ξ is set to max{Yk , Y(k mod m)+1 }, where {Yk }k∈[m] are independent Bernoulli random variables
+following the distribution Pr{Yk = 1} = αk , αk are uniformly chosen from [0.01, 0.0275], and mod
+denotes the modulo operator. For the star distribution, the k-th entry of the random vector ξ is
+set to 0 if Vk ≤ 1 and 1 otherwise, where Vk = Yk + Ym+1 , {Yk }k∈[m+1] are independent Poisson
+−λk
+τ
+k)
+(τ ∈ Z+ ), and λk are uniformly
+random variables following the distribution Pr(Yk = τ ) = e τ(λ
+!
+chosen from [0.1, 0.2]. The distributions of the random variables ξ t can be described in a similar
+manner. In our random construction procedure, the scenario size s and the confidence parameter
+ϵ are chosen from {103 , 3×103 , 5×103 , 104 , 106 } and {0.05, 0.1}, respectively. In total, there are
+3600 PSCP instances of problems (MIP) and (MINLP), respectively, in our testset.
+
+5.3
+
+Performance effect of lifted cover inequalities
+
+In this subsection, we evaluate the performance effect of the lifted cover inequalities in Section 4
+for solving PSCPs with and without the consideration of a block structure of ξ (i.e., problems
+(MINLP) and (MIP)). Let us first consider the subclass of them: the maximal clique inequalities
+(48), which do not need to invoke the potentially computationally expensive lifting procedure; see
+Section 4.4. To do this, we compare the following two settings:
+• BD: problem (MIP) or (MINLP) is solved using the proposed BD algorithm in which the
+two-cover inequalities initialize the relaxed master problem and the Benders feasibility cuts
+are separated on the fly at the nodes of the search tree (as mentioned earlier, CPLEX can
+automatically strengthen the two-cover inequalities into maximal clique inequalities (48));
+• NoCI: problem (MIP) or (MINLP) is solved using BD without the two-cover inequalities.
+Tables 1 and 2 summarize the computational results. For each setting, we report the total
+number of instances solved within the time limit (S), the average CPU time in seconds (T), the
+average number of explored nodes (N), and the average percentage of gap improvement defined
+−zLP
+× 100%, where z is the objective value of the optimal solution or the best
+by GI % = zroot
+z−zLP
+incumbent of problem (MIP) or (MINLP), zLP is the optimal value of its LP relaxation, and zroot
+is the LP relaxation bound obtained at the root node. For instances that cannot be solved within
+17
+
+Table 1: Performance comparison of NoCI and BD on problem (MIP).
+All
+
+NoCI
+S
+
+ϵ
+
+0.05
+0.1
+
+(m, n) (50, 500)
+(200, 1000)
+(200, 2000)
+(300, 3000)
+(400, 4000)
+(500, 5000)
+
+G%
+
+N
+
+GI %
+
+1800 1530 90.2 19.1
+1800 1404 201.9 15.0
+
+59
+315
+
+300
+900
+600
+600
+600
+600
+
+300
+900
+600
+600
+504
+30
+
+T
+
+BD
+
+23.3
+0.0
+325
+27.4
+0.0
+19
+30.7
+0.0
+18
+79.7
+0.0
+545
+476.7 4.4 3031
+6970.7 20.4 58685
+
+S
+
+T
+
+G%
+
+N
+
+GI %
+
+15.3 1635
+5.9 1400
+
+59.9
+202.3
+
+13.7
+15.0
+
+24
+316
+
+25.2 27571
+5.9
+11
+
+0.7
+24.6
+35.7
+9.0
+10.5
+1.0
+
+20.3
+0.0
+222
+24.8
+0.0
+13
+27.0
+0.0
+11
+70.8
+0.0
+399
+320.7 4.4 1275
+4859.2 18.1 23908
+
+1.8
+51
+30.6 422
+41.2 422
+11.7 741
+13.0 1324
+1.6 1417
+
+300
+900
+600
+600
+500
+135
+
+CI
+
+Table 2: Performance comparison of NoCI and BD on problem (MINLP).
+All
+
+NoCI
+S
+
+ϵ
+
+0.05
+0.1
+
+(m, n) (50, 500)
+(200, 1000)
+(200, 2000)
+(300, 3000)
+(400, 4000)
+(500, 5000)
+
+1800 1644
+1800 1540
+300
+900
+600
+600
+600
+600
+
+BD
+
+T
+
+G%
+
+N
+
+GI %
+
+62.7
+93.5
+
+18.2
+18.1
+
+69
+90
+
+300 18.5
+900 20.8
+600 22.3
+593 51.1
+506 133.9
+285 2959.0
+
+0.0 172
+0.0
+7
+0.0
+4
+1.3 203
+9.0 623
+22.2 50031
+
+S
+
+T
+
+G%
+
+N
+
+GI %
+
+17.3 1701
+10.5 1555
+
+50.7
+90.6
+
+14.1
+14.6
+
+38
+91
+
+27.2 27643
+11.8 11
+
+1.2
+40.6
+55.9
+13.2
+7.2
+2.5
+
+17.6
+0.0
+155
+20.6
+0.0
+5
+21.1
+0.0
+3
+45.0
+0.7
+147
+91.2
+5.9
+307
+2618.7 18.5 45984
+
+300
+900
+600
+597
+525
+334
+
+CI
+
+2.1
+52
+44.6 423
+59.5 423
+16.7 737
+13.8 1340
+4.4 1422
+
+the time limit, we report the average relative end gap (G %) in percentage returned by CPLEX.
+Under setting BD, we additionally report the average number of the two-cover inequalities (CI).
+Throughout the paper, all averages are reported as the shifted geometric mean with a shift of 1;
+see Achterberg (2007).
+We can observe from Tables 1 and 2 that for instances with ϵ = 0.1, the number of added
+two-cover inequalities is very small; see column CI. This is because when ϵ is large, the condition
+λ({j, k}) ≥ ϵ is likely not to be satisfied, and hence only a small number of two-cover inequalities are constructed. Due to this, the performance effect of the two-cover inequalities (or their
+strengthened version, maximal clique inequalities) on the proposed BD algorithm is neutral on
+instances with ϵ = 0.1. In contrast, for instances with ϵ = 0.05 which is relatively small, a large
+number of two-cover inequalities can be derived from problems (MIP) and (MINLP). Due to
+this, CPLEX can construct more clique inequalities, which is evidenced by column GI % where we
+observe that the gap improvement returned by BD is much better than that returned by NoCI.
+Due to the improvement on the LP relaxation bound, the performance of BD is much better than
+that of NoCI. Overall, for problem (MIP), BD can solve 1635 instances among the 1800 instances
+to optimality, whereas NoCI can only solve 1530 of them to optimality, and the average CPU time
+and number of explored nodes are reduced by factors of 1.5 and 2.5, respectively; for problem
+18
+
+(MINLP), BD can solve 1701 instances to optimality, whereas NoCI can only solve 1644 of them to
+optimality, and the average CPU time and number of explored nodes are reduced by factors of 1.2
+and 1.8, respectively. When comparing the results grouped by the numbers of rows and columns
+(m, n), we see that with the increasing of (m, n), solving problems (MIP) and (MINLP) becomes
+more difficult and the maximal clique inequalities become more effective. In particular, for the
+case with (m, n) = (500, 5000), the proposed maximal clique inequalities enable to solve 105 and
+49 more instances of problems (MIP) and (MINLP), respectively, to optimality within the time
+limit of 7200 seconds.
+Next, we evaluate the performance effect of the (general) lifted cover inequalities (40) in Sections 4.2 and 4.3, which, compared with the maximal clique inequalities, require to solve the LP
+relaxations of the lifting problems (42) and (47) using the customized algorithm of Chicoisne et al.
+(2012). To do this, we compare the performance of BD, where the maximal clique inequalities (48)
+are added, with
+• BD+LCI: problem (MIP) or (MINLP) is solved using BD with the lifted cover inequalities in
+Section 4.2 or Section 4.3, respectively.
+Tables 3 and 4 report the computational results of BD and BD+LCI on instances with 103 , 3 ×
+103 , 5×103 , and 104 scenarios. We do not report the computational results on instances with 106
+scenarios as solving the LP relaxation of the lifting problem (42) or (47) is too time-consuming for
+the customized algorithm of Chicoisne et al. (2012). Under setting BD+LCI, we report the average
+CPU time spent in the computation of the lifted cover inequalities in seconds (CT) and the average
+number of added lifted cover inequalities (LCI).
+From Table 4, we observe from column LCI that for problem (MINLP), only a small number
+of lifted cover inequalities are added, resulting in a small improvement on the LP relaxation
+bound. Consequently, the number of explored nodes does not significantly decrease. In contrast,
+for problem (MIP), Table 3 shows that a large number of lifted cover inequalities can be derived,
+especially for instances with ϵ = 0.1. As a result, compared with BD, BD+LCI achieves a much better
+gap improvement and a much smaller number of explored nodes; the number of explored nodes is
+reduced by factors 1.2 and 3.4 for instances with ϵ = 0.05 and ϵ = 0.1, respectively. Unfortunately,
+for both problems (MIP) and (MINLP), solving the LP relaxations of the lifting problems (42) and
+(47) is very computationally demanding, especially for instances with a large m (as the problem
+sizes of the lifting problems are large). Thus, the (general) lifted cover inequalities (40) cannot
+improve the overall performance of BD. Nevertheless, for problem (MIP), the addition of the lifted
+cover inequalities (40) enables to solve 28 more instances with (m, n) = (400, 4000) or (500, 5000) to
+optimality, suggesting that the lifted cover inequalities can be used to tackle challenging instances
+of problem (MIP) (with large numbers of rows and columns).
+
+5.4
+
+Comparison with the state-of-the-art approaches
+
+In this subsection, we compare the performance of the proposed BD algorithm with state-of-the-art
+approaches for solving PSCPs with and without the consideration of a block structure of ξ.
+We first consider the PSCP with an arbitrary finite discrete distribution of ξ, where the underlying formulation is problem (MIP), and compare the performance of the proposed BD algorithm
+with the CPLEX’s default B&C and automatic BD algorithms (called CPX and AUTO-BD, respectively). The results are summarized in Table 5. From Table 5, we see that CPX outperforms BD on
+PSCP instances with 103 scenarios. This is not surprising, as the BD algorithm typically draws
+an advantage over the case for which the size of the Benders reformulation can be significantly
+19
+
+Table 3: Performance comparison of BD and BD+LCI on problem (MIP).
+All
+
+BD
+S
+
+ϵ
+
+0.05
+0.1
+
+(m, n) (50, 500)
+(200, 1000)
+(200, 2000)
+(300, 3000)
+(400, 4000)
+(500, 5000)
+
+G%
+
+N
+
+GI %
+
+G%
+
+N
+
+GI %
+
+1440 1309 56.0 14.2
+1440 1123 185.9 16.5
+
+41
+311
+
+24.2 1320 134.8 14.0
+5.7 1140 963.7 16.2
+
+33
+91
+
+30.2 48.6 13
+17.6 551.3 194
+
+240
+720
+480
+480
+480
+480
+
+T
+
+BD+LCI
+
+240 19.4 0.0 220 1.8
+720 22.4 0.0 13 28.9
+480 24.5 0.0 11 41.2
+480 63.1 0.0 402 10.9
+403 298.3 4.8 1424 12.7
+109 4822.0 18.5 34981 1.6
+
+S
+
+T
+
+CT
+
+240 38.6 0.0 176 7.6 19.3
+720 116.0 0.0
+6
+51.7 71.3
+480 132.3 0.0
+3
+73.9 83.0
+480 441.2 0.0 203 21.8 354.1
+420 890.8 4.4 773 24.2 493.0
+120 5372.8 18.3 31040 3.0 501.8
+
+LCI
+
+27
+32
+38
+89
+92
+66
+
+Table 4: Performance comparison of BD and BD+LCI on problem (MINLP).
+All
+
+BD
+S
+
+ϵ
+
+0.05
+0.1
+
+(m, n) (50, 500)
+(200, 1000)
+(200, 2000)
+(300, 3000)
+(400, 4000)
+(500, 5000)
+
+1440 1373
+1440 1261
+240
+720
+480
+480
+480
+480
+
+BD+LCI
+
+T
+
+G%
+
+N
+
+GI %
+
+G%
+
+N
+
+GI %
+
+42.9
+75.6
+
+13.5
+16.8
+
+53
+100
+
+26.8 1372 48.9 13.7
+11.9 1271 182.0 13.8
+
+52
+95
+
+26.9 1.9 <1
+13.6 40.8 3
+
+240 16.5 0.0 156 1.9
+720 17.8 0.0
+6
+44.1
+480 18.5 0.0
+3
+59.3
+477
+35.5 0.0
+151 17.1
+421
+70.7
+6.3
+327 14.1
+296 2181.8 19.4 50004 4.4
+
+S
+
+T
+
+CT LCI
+
+240 17.6 0.0 158 1.9 1.7 <1
+720 36.4 0.0
+5
+45.3 9.5 1
+480 36.6 0.0
+3
+61.0 9.3 1
+480 65.3 0.0 140 18.8 11.2 1
+434 131.8 4.9 315 16.5 12.6 1
+289 2328.0 17.4 50036 4.9 9.8 1
+
+reduced compared to the original problem. For PSCP instances with 103 scenarios, the number
+of variables is only reduced by 103 , which does not allow the proposed BD algorithm to draw
+a competitive advantage. However, for instances with at least 3 × 103 scenarios, as the number
+of variables in the Benders reformulation (17) is much smaller than that of the original problem
+(MIP), the performance of BD is much better than that of CPX. Indeed, for large-scale instances
+with 106 scenarios, CPX was even unable to solve the LP relaxation of problem (MIP) within the
+time limit of 7200 seconds while BD can solve 603 instances among the 720 instances to optimality. Comparing AUTO-BD and BD, we observe that for instances with at most 104 scenarios, the
+performance of the two settings is comparable; BD is slightly outperformed by AUTO-BD in terms of
+the CPU time, but can solve more instances to optimality within the time limit of 7200 seconds.
+For large-scale instances with 106 scenarios, BD significantly outperforms AUTO-BD; BD can solve 25
+more instances with the CPU time reduced by a factor of 4.6. When looking at the computational
+results grouped by the numbers of rows and columns (m, n), we observe that with the increasing
+of (m, n), solving problem (MIP) becomes more difficult for all three settings CPX, AUTO-BD, and
+BD; compared with the other two settings, our proposed BD performs much better on the hard
+instances with (m, n) = (400, 4000), (500, 5000).
+Next, we consider the PSCP with a block structure of ξ, where the underlying formulation is
+20
+
+Table 5: Performance comparison of CPX, AUTO-BD, and BD on problem (MIP). “–” means
+that CPX was unable to find a feasible solution (for instances with 106 scenarios) within the
+time limit.
+All
+s
+
+103
+3×103
+
+(m, n)
+
+5×103
+104
+106
+(50, 500)
+(200, 1000)
+(200, 2000)
+(300, 3000)
+(400, 4000)
+(500, 5000)
+
+720
+720
+720
+720
+720
+300
+900
+600
+600
+600
+600
+
+CPX
+S
+628
+593
+570
+526
+–
+239
+720
+480
+472
+378
+28
+
+T
+61.3
+177.8
+348.8
+917.8
+–
+160.0
+122.4
+127.7
+496.0
+1583.8
+7043.2
+
+AUTO-BD
+G%
+15.4
+21.8
+23.3
+27.7
+–
+–
+–
+–
+–
+–
+–
+
+S
+585
+585
+586
+582
+578
+300
+900
+600
+600
+423
+93
+
+T
+85.2
+91.8
+94.2
+100.9
+691.8
+19.9
+21.2
+26.2
+107.6
+849.8
+6257.4
+
+BD
+G%
+21.4
+18.9
+16.5
+15.7
+16.1
+0.0
+0.0
+0.0
+0.0
+5.6
+20.5
+
+S
+609
+606
+610
+607
+603
+300
+900
+600
+600
+500
+135
+
+T
+103.0
+101.4
+100.3
+104.1
+149.4
+20.3
+24.8
+27.0
+70.8
+320.7
+4859.2
+
+G%
+18.6
+16.8
+14.9
+14.4
+14.4
+0.0
+0.0
+0.0
+0.0
+4.7
+18.5
+
+problem (MINLP), and compare the performance of the proposed BD algorithm with the stateof-the-art B&C algorithm of Saxena et al. (2010), denoted by B&C (in Online Appendix D, we
+also present computational results to compare the performance of the proposed BD algorithm
+with the direct use of the state-of-the-art MINLP solver Gurobi). The B&C algorithm of Saxena
+et al. (2010) solves an MIP formulation built on the so-called (1−ϵ)-efficient and -inefficient points
+(which must be enumerated before starting the algorithm). Table 6 summarizes the computational
+results on instances with block sizes being 10 and 20. We do not report the results on instances
+with a single block, as for the B&C algorithm of Saxena et al. (2010), the block size is too large to
+enumerate the (1−ϵ)-efficient and -inefficient points within a reasonable period of time. For setting
+B&C, we report the average number of (linear) constraints that are used to model the probabilistic
+constraint (C); and for completeness, we also report the average CPU time spent in the enumeration
+phase (ET), which is not included in the time spent in solving the MIP formulation. From Table 6,
+we observe that the performance of B&C and BD is not sensitive to the number of scenarios s when
+s ≤ 104 . However, solving instances with s = 106 using both B&C and BD is more computationally
+expensive; for B&C, the additional computational effort comes from the enumeration procedure of
+(1 − ϵ)-efficient and -inefficient points. As for the problem size, we observe that, as expected, with
+the increasing of (m, n), solving problem (MINLP) is more computationally expensive for both B&C
+and BD; for the largest case (m, n) = (500, 5000), the proposed BD cannot solve all instances with
+103 scenarios (deduced from the facts that BD can solve PSCP instances with (m, n) ≤ (400, 4000)
+to optimality and for instances with 103 scenarios, it fails to solve 13 of them to optimality).
+In addition, when ϵ and the block size are small or ξ t is constructed by a circular distribution,
+the number of constraints in the MIP formulation of Saxena et al. (2010) is small, and thus B&C
+performs better than or comparably to the proposed BD (provided that (1 − ϵ)-efficient and inefficient points are at hand). However, for instances with a large ϵ, a large block size, or the
+star distribution of ξ t , due to the large number of constraints in the MIP formulation, using B&C
+yields worse performance. In contrast, as the proposed BD algorithm does not need to solve a
+large MIP formulation, it performs significantly better than B&C on these instances, as illustrated
+in Table 6. Indeed, the performances of BD on instances with different ϵ, block size, or distribution
+21
+
+Table 6: Performance comparison of B&C of Saxena et al. (2010) and BD on problem (MINLP).
+All
+s
+
+(m, n)
+
+ϵ
+Block size
+Distribution
+
+103
+3×103
+5×103
+104
+106
+(50, 500)
+(200, 1000)
+(200, 2000)
+(300, 3000)
+(400, 4000)
+(500, 5000)
+0.05
+0.1
+10
+20
+Circular
+Star
+
+480
+480
+480
+480
+480
+200
+600
+400
+400
+400
+400
+1200
+1200
+1200
+1200
+1200
+1200
+
+B&C
+S
+432
+428
+432
+432
+432
+199
+595
+381
+356
+348
+277
+1190
+966
+1182
+974
+1146
+1010
+
+T
+82.8
+79.2
+78.3
+85.0
+84.4
+29.1
+26.2
+29.7
+63.0
+120.9
+1750.3
+24.1
+273.3
+34.6
+192.1
+50.1
+133.5
+
+G%
+18.7
+19.4
+19.6
+20.0
+19.1
+0.0
+0.0
+0.0
+0.0
+0.0
+19.3
+10.1
+21.8
+11.9
+21.2
+16.5
+20.7
+
+BD
+C
+8488
+8080
+7923
+7991
+8099
+1548
+6516
+6516
+9807
+13111
+16447
+2321
+28354
+3649
+18038
+4907
+13416
+
+ET
+50.2
+55.0
+56.9
+58.6
+293.0
+23.9
+66.3
+68.5
+86.9
+106.4
+125.0
+62.2
+95.6
+2.2
+1897.7
+55.3
+107.4
+
+S
+467
+466
+465
+467
+431
+200
+600
+400
+400
+400
+296
+1163
+1133
+1162
+1134
+1159
+1137
+
+T
+40.5
+40.1
+40.5
+38.0
+107.3
+16.6
+18.0
+17.6
+26.7
+41.6
+1943.7
+49.4
+47.8
+47.3
+49.9
+47.2
+49.9
+
+G%
+12.7
+12.2
+11.9
+13.5
+14.8
+0.0
+0.0
+0.0
+0.0
+0.0
+13.2
+12.3
+13.4
+14.9
+12.9
+13.0
+13.3
+
+of ξ t are comparable, showing that the performance of BD is not sensitive to the parameters ϵ,
+block size, or distribution of ξ t . Moreover, compared with B&C, the proposed BD can avoid calling
+a potentially time-consuming enumeration procedure of (1 − ϵ)-efficient and -inefficient points.
+These results show that for PSCPs with a block structure of ξ, the proposed BD algorithm is
+much more robust than the state-of-the-art approach in Saxena et al. (2010) in terms of solving
+(PSCP’) with different input parameters.
+
+5.5
+
+Comparison of solving problems (MIP) and (MINLP)
+
+Finally, we compare the performance of problems (MIP) and (MINLP) when using them as sample
+approximation problems to solve PSCPs. We use the proposed BD algorithms to solve the two
+problems. Table 7 summarizes the computational results. To see the difference between the two
+problems, we additionally report the number of instances with different optimal values (ND) and
+|o1 −o2 |
+, where
+the gap between the optimal values of these instances (defined by ∆O(%) = 100 × max{o
+1 ,o2 }
+o1 and o2 represent the optimal values of the two problems).
+As shown in Table 7, for most cases, the optimal values of problems (MIP) and (MINLP) are
+identical, and even if the optimal values are different in some cases, their difference is usually
+very small. This shows that the gap between the two problems is indeed very small, especially
+for the cases with a huge scenario size. As for the computational efficiency, we observe that, as
+expected, for instances with a single block, solving problem (MINLP) is outperformed by solving
+problem (MIP). In contrast, for instances with multiple blocks (or block sizes of 10 and 20),
+problem (MINLP) is much more solvable by the proposed BD algorithm. This is reasonable as
+by exploiting the block structure of the random variable ξ, up to T cuts can be constructed in a
+22
+
+Table 7: Performance comparison of problems (MIP) and (MINLP).
+Problem (MIP)
+
+All
+
+T
+
+G%
+
+S
+
+T
+
+G%
+
+ND
+
+∆O(%)
+
+5×103
+104
+106
+
+720
+720
+720
+720
+720
+
+609
+606
+610
+607
+603
+
+103.0
+101.4
+100.3
+104.1
+149.4
+
+16.9
+16.3
+16.3
+16.7
+18.0
+
+660
+658
+656
+660
+622
+
+57.8
+57.6
+57.9
+54.7
+135.6
+
+16.0
+17.1
+16.1
+16.6
+15.5
+
+51
+32
+26
+15
+3
+
+1.0
+0.9
+0.9
+1.0
+1.0
+
+10
+20
+m
+
+1200
+1200
+1200
+
+1023
+1015
+997
+
+107.7
+113.4
+109.7
+
+22.0
+22.5
+14.7
+
+1162
+1134
+960
+
+47.3
+49.9
+131.8
+
+13.8
+13.1
+17.8
+
+67
+60
+0
+
+0.8
+1.0
+0.0
+
+3×103
+
+Block size
+
+Difference
+
+S
+103
+
+s
+
+Problem (MINLP)
+
+single iteration, making the proposed BD algorithm for problem (MINLP) converge much faster.
+
+6
+
+Conclusions and future work
+
+In this paper, we have considered the PSCPs with an arbitrary finite discrete distribution of ξ and
+with a block structure of ξ. We developed efficient BD algorithms for solving the MIP and MINLP
+formulations of the PSCPs where the scenario variables are projected out from the formulation
+and the Benders feasibility cuts are separated on the fly. Three key features of the proposed
+BD algorithms, which make them particularly suitable for solving large-scale PSCPs, are: (i) the
+numbers of variables in the underlying Benders reformulations are independent of the scenario sizes
+of ξ; (ii) the Benders feasibility cuts can be separated by an efficient polynomial-time algorithm;
+and (iii) they are equipped with a class of strong valid inequalities—lifted cover inequalities,
+which renders them able to converge more quickly. By extensive computational experiments, we
+demonstrated the effectiveness of our proposed BD algorithms for solving large-scale PSCPs. In
+particular, for PSCPs with an arbitrary finite discrete distribution of ξ, the proposed BD algorithm
+is much more efficient than the B&C and automatic BD algorithms of CPLEX (when the number
+of scenarios is large); for PSCPs with a block structure of ξ, the proposed BD algorithm is much
+more robust than the state-of-the-art approach in Saxena et al. (2010) in terms of solving problems
+with different input parameters.
+As observed in Section 5.3, the proposed approach for computing the general lifted cover
+inequalities in Sections 4.2 and 4.3 is still computationally demanding, making it generally not
+beneficial to the proposed BD algorithms for solving PSCPs. As for future work, we shall develop
+acceleration strategies for efficiently solving the lifting problems. One interesting direction is to
+analyze the relations among the lifting problems and design warm-start algorithms based on the
+solutions of previously solved lifting problems, as to speed up the computation of the lifted cover
+inequalities. In addition, it would be interesting to extend the proposed BD approach to other
+variants of the PSCP, such as the robust version (Lutter et al., 2017; Shen and Jiang, 2023) and
+the conditional value-at-risk based risk-averse version (Deng et al., 2018; Wu and Küçükyavuz,
+2020) of the SCP.
+
+23
+
+Acknowledgments
+We would like to thank the two anonymous reviewers for their insightful comments that significantly improved the quality of our work.
+
+References
+Achterberg, T. (2007). Constraint Integer Programming. Ph.D. thesis, Technical University of
+Berlin.
+Ahmed, S. and Papageorgiou, D. J. (2013). Probabilistic set covering with correlations. Oper.
+Res., 61(2):438–452.
+Ahmed, S. and Shapiro, A. (2008). Solving chance-constrained stochastic programs via sampling
+and integer programming. In Chen, Z.-L. and Raghavan, S., editors, Tutorials in Operations
+Research: State-of-the-Art Decision-Making Tools in the Information-Intensive Age, pages 261–
+269. INFORMS.
+Atamtürk, A., Nemhauser, G. L., and Savelsbergh, M. W. (2000). Conflict graphs in solving
+integer programming problems. Eur. J. Oper. Res., 121(1):40–55.
+Azizi, N., Garcı́a, S., and Irawan, C. A. (2022). Discrete location problems with uncertainty. In
+Salhi, S. and Boylan, J., editors, The Palgrave Handbook of Operations Research, pages 43–71.
+Palgrave Macmillan, Cham.
+Beasley, J. E. (1990). OR-library: Distributing test problems by electronic mail. J. Oper. Res.
+Soc., 41(11):1069–1072.
+Belotti, P., Kirches, C., Leyffer, S., Linderoth, J., Luedtke, J., and Mahajan, A. (2013). Mixedinteger nonlinear optimization. Acta Numer., 22:1–131.
+Beraldi, P. and Bruni, M. E. (2010). An exact approach for solving integer problems under
+probabilistic constraints with random technology matrix. Ann. Oper. Res., 177(1):127–137.
+Beraldi, P. and Ruszczyński, A. (2002). The probabilistic set-covering problem. Oper. Res.,
+50(6):956–967.
+Bodur, M. and Luedtke, J. R. (2017). Mixed-integer rounding enhanced Benders decomposition
+for multiclass service-system staffing and scheduling with arrival rate uncertainty. Manag. Sci.,
+63(7):2073–2091.
+Bonami, P., Kilinç, M., and Linderoth, J. (2012). Algorithms and software for convex mixed integer
+nonlinear programs. In Lee, J. and Leyffer, S., editors, Mixed Integer Nonlinear Programming,
+pages 1–39. Springer, New York.
+Brito, S. S. and Santos, H. G. (2021). Preprocessing and cutting planes with conflict graphs.
+Comput. Oper. Res., 128:105176.
+Burke, E. K., Mareček, J., Parkes, A. J., and Rudová, H. (2012). A branch-and-cut procedure
+for the udine course timetabling problem. Ann. Oper. Res., 194(1):71–87.
+
+24
+
+Chen, W.-K., Chen, Y.-L., Dai, Y.-H., and Lv, W. (2024). Towards large-scale probabilistic set
+covering problem: An efficient Benders decomposition approach. In 2024 INFORMS Optimization Society conference. https://sites.google.com/view/ios2024refereed?usp=sharing.
+Chicoisne, R., Espinoza, D., Goycoolea, M., Moreno, E., and Rubio, E. (2012). A new algorithm
+for the open-pit mine production scheduling problem. Oper. Res., 60(3):517–528.
+Cordeau, J.-F., Furini, F., and Ljubić, I. (2019). Benders decomposition for very large scale partial
+set covering and maximal covering location problems. Eur. J. Oper. Res., 275(3):882–896.
+Deng, Y., Ahmed, S., and Shen, S. (2018). Parallel scenario decomposition of risk-averse 0-1
+stochastic programs. INFORMS J. Comput., 30(1):90–105.
+Espinoza, D., Goycoolea, M., and Moreno, E. (2015). The precedence constrained knapsack
+problem: Separating maximally violated inequalities. Discret. Appl. Math., 194:65–80.
+Feng, Z., Okamura, H., Dohi, T., and Yun, W. Y. (2024). Reliability computing methods of
+probabilistic location set covering problem considering wireless network applications. IEEE
+Trans. Reliab., 73(1):290–303.
+Fischetti, M., Ljubić, I., and Sinnl, M. (2016). Benders decomposition without separability: A
+computational study for capacitated facility location problems. Eur. J. Oper. Res., 253(3):557–
+569.
+Fischetti, M. and Monaci, M. (2012). Cutting plane versus compact formulations for uncertain
+(integer) linear programs. Math. Program. Comput., 4:239–273.
+Gendron, B., Scutellà, M. G., Garroppo, R. G., Nencioni, G., and Tavanti, L. (2016). A branchand-Benders-cut method for nonlinear power design in green wireless local area networks. Eur.
+J. Oper. Res., 255(1):151–162.
+Geoffrion, A. M. (1972). Generalized Benders decomposition. J. Optim. Theory Appl., 10(4):237–
+260.
+Grötschel, M., Lovász, L., and Schrijver, A. (1993). Geometric Algorithms and Combinatorial
+Optimization. Springer, Berlin.
+Gu, Z., Nemhauser, G. L., and Savelsbergh, M. W. P. (1998). Lifted cover inequalities for 0-1
+integer programs: Computation. INFORMS J. Comput., 10(4):427–437.
+Günlük, O. and Pochet, Y. (2001). Mixing mixed-integer inequalities. Math. Program., 90(3):429–
+457.
+Hwang, H.-S. (2004). A stochastic set-covering location model for both ameliorating and deteriorating items. Comput. Ind. Eng., 46(2):313–319.
+Jiang, N. and Xie, W. (2025). The terminator: An integration of inner and outer approximations
+for solving wasserstein distributionally robust chance constrained programs via variable fixing.
+INFORMS J. Comput., 37(2):381–412.
+Johnson, D. S. and Niemi, K. A. (1983). On knapsacks, partitions, and a new dynamic programming technique for trees. Math. Oper. Res., 8(1):1–14.
+25
+
+Küçükyavuz, S. and Jiang, R. (2022). Chance-constrained optimization under limited distributional information: A review of reformulations based on sampling and distributional robustness.
+EURO J. Comput. Optim., 10:100030.
+Küçükyavuz, S. and Sen, S. (2017). An introduction to two-stage stochastic mixed-integer programming. In Batta, R. and Peng, J., editors, Tutorials in Operations Research: Leading
+Developments from INFORMS Communities, pages 1–27. INFORMS.
+Lejeune, M. and Noyan, N. (2010). Mathematical programming approaches for generating pefficient points. Eur. J. Oper. Res., 207(2):590–600.
+Lejeune, M. A. (2008). Preprocessing techniques and column generation algorithms for stochastically efficient demand. J. Oper. Res. Soc., 59(9):1239–1252.
+Liu, X., Küçükyavuz, S., and Luedtke, J. (2016). Decomposition algorithms for two-stage chanceconstrained programs. Math. Program., 157(1):219–243.
+Luedtke, J. (2014). A branch-and-cut decomposition algorithm for solving chance-constrained
+mathematical programs with finite support. Math. Program., 146:219–244.
+Luedtke, J. and Ahmed, S. (2008). A sample approximation approach for optimization with
+probabilistic constraints. SIAM J. Optim., 19(2):674–699.
+Luedtke, J., Ahmed, S., and Nemhauser, G. L. (2010). An integer programming approach for
+linear programs with probabilistic constraints. Math. Program., 122:247–272.
+Lutter, P., Degel, D., Büsing, C., Koster, A. M. C. A., and Werners, B. (2017). Improved handling
+of uncertainty and robustness in set covering problems. Eur. J. Oper. Res., 263(1):35–49.
+Lv, W., Chen, W.-K., Chen, Y.-L., and Dai, Y.-H. (2025). Towards large-scale probabilistic set
+covering problems: An efficient Benders decomposition approach. https://doi.org/10.1287/
+ijoc.2025.1307.cd, https://github.com/INFORMSJoC/2025.1307.
+Nemirovski, A. and Shapiro, A. (2006). Scenario approximations of chance constraints. In
+Calafiore, G. and Dabbene, F., editors, Probabilistic and Randomized Methods for Design under
+Uncertainty, pages 3–47. Springer, London.
+Norkin, V. I. (2018). Optimization models of anti-terrorist protection. Cybern. Syst. Anal.,
+54(6):918–929.
+Pagnoncelli, B. K., Ahmed, S., and Shapiro, A. (2009). Sample average approximation method for
+chance constrained programming: Theory and applications. J. Optim. Theory Appl., 142(2):399–
+416.
+Prékopa, A. (1990). Dual method for the solution of a one-stage stochastic programming problem with random RHS obeying a discrete probability distribution. Math. Methods Oper. Res.,
+34(6):441–461.
+Prékopa, A. (2003). Probabilistic programming. In Ruszczyński, A. and Shapiro, A., editors,
+Stochastic Programming: Handbooks in Operations Research and Management Science, volume 10, pages 267–351. Elsevier.
+26
+
+Rahmaniani, R., Crainic, T. G., Gendreau, M., and Rei, W. (2017). The Benders decomposition
+algorithm: A literature review. Eur. J. Oper. Res., 259(3):801–817.
+Rebennack, S., Reinelt, G., and Pardalos, P. M. (2012). A tutorial on branch and cut algorithms
+for the maximum stable set problem. Int. Tran. Oper. Res., 19(1-2):161–199.
+Richard, J.-P. P. (2011). Lifting techniques for mixed integer programming. In Wiley Encyclopedia
+of Operations Research and Management Science.
+Saxena, A., Goyal, V., and Lejeune, M. A. (2010). MIP reformulations of the probabilistic set
+covering problem. Math. Program., 121(1):1–31.
+Shen, H. and Jiang, R. (2023). Chance-constrained set covering with Wasserstein ambiguity. Math.
+Program., 198(1):621–674.
+Song, Y. and Luedtke, J. R. (2013). Branch-and-cut approaches for chance-constrained formulations of reliable network design problems. Math. Program. Comput., 5(4):397–432.
+Song, Y., Luedtke, J. R., and Küçükyavuz, S. (2014). Chance-constrained binary packing problems. INFORMS J. Comput., 26(4):735–747.
+Toregas, C., Swain, R., ReVelle, C. S., and Bergman, L. (1971). The location of emergency service
+facilities. Oper. Res., 19(6):1363–1373.
+Wang, S., Li, J., and Mehrotra, S. (2021). Chance-constrained multiple bin packing problem with
+an application to operating room planning. INFORMS J. Comput., 33(4):1661–1677.
+Wolsey, L. A. (1976). Facets and strong valid inequalities for integer programs. Oper. Res.,
+24(2):367–372.
+Wu, H. H. and Küçükyavuz, S. (2019). Probabilistic partial set covering with an oracle for chance
+constraints. SIAM J. Optim., 29(1):690–718.
+Wu, H.-H. and Küçükyavuz, S. (2020). An exact method for constrained maximization of the conditional value-at-risk of a class of stochastic submodular functions. Oper. Res. Lett., 48(3):356–
+361.
+Wu, P., Wu, X., and Chen, G. (2016). Rest with eyes open: Stochastic target coverage in wireless
+sensor networks with data fusion. Int. J. Sens. Netw., 20(1):16–25.
+
+27
+
+

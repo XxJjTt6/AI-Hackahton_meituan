@@ -67,6 +67,58 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 python3 _bench.py solver.py 1
 ```
 
+## 网页端 Agent 系统演示
+
+本仓库现在包含一个可在浏览器中实际运行的 AutoSolver Agent System。它不是静态 trace 页面，而是由网页触发后端 Agent 控制器，真实执行以下闭环：
+
+- 自主策略探索：主动尝试贪心、单任务多派、启发式 gain、pair matching、sparse cover、生产级综合求解器等策略。
+- 自动评估与筛选：每次尝试后调用 `solver.py` 的 `_solution_expected_cost` 计算本地 Critic cost，仅用于候选相对筛选；官方成绩只引用 `runs/official_submit_20260520_132026_70222083.json`。
+- 迭代改进循环：根据上一轮最优策略、覆盖率和场景类型，自动决定下一轮转向 low/scarce 专用搜索或 production solver。
+- 时间限制输出：控制器为非生产策略分配短时间片，接近预算时停止扩展，输出 best-so-far。
+- 自进化实验轨道：`autosolver_agent/evolution.py` 会生成实验 Python strategy，经过 Safety Gate、Sandbox Execute、合法性校验和 Critic 判断；失败会写入 rollback 记录并回退 stable baseline，成功会写入 `strategy_registry.json` / `evolution_memory.jsonl` 作为下一轮 Planner 参考。该轨道不会自动改写正式 `solver.py`。
+
+注意：Evolution Memory / generated strategies 属于网页演示与赛前自我进化实验，不进入官方 `solve()` 的 10 秒热路径。正式评测仍只运行已经验证好的 `solver.py`，避免动态加载、读历史日志或生成代码消耗预算。
+
+启动方式：
+
+```bash
+cd /Users/比赛/FOR_AutoSolver_706.20_codex
+python3 web_agent_demo/server.py --host 127.0.0.1 --port 8765
+```
+
+然后在浏览器打开：
+
+```text
+http://127.0.0.1:8765
+```
+
+页面上点击 `启动 Agent 求解`，即可看到 Perception、Planner、Strategy Trials、Critic、Self-Evolving Code Loop、Memory 与 Rollback 的实时事件流。该网页端只用于答辩展示，不改变正式提交物 `solver.py`，也不把本地 cost 当作官方分数。
+
+最终交付辅助验证：
+
+```bash
+python3 -m unittest discover -s tests/agent_capabilities -p 'test_*.py'
+python3 -m unittest discover -s tests -p 'test_web_agent_demo.py'
+python3 tools/agent_trace_demo.py "Fwd_ 【美团AI Hackathon大赛】-【命题四AutoSolver：让AI Agent 自主求解配送分配问题】脱敏数据/large_seed301.txt" --json-output runs/demo_trace_large301.json --markdown runs/demo_trace_large301.md
+python3 tools/render_lineage.py runs/demo_trace_large301.json --output runs/demo_trace_large301.dot
+python3 tools/make_submission.py --output submission_dryrun
+```
+
+当前最终交付包：
+
+```text
+submission_final/
+├── solver.py
+├── README.md
+├── AutoSolver_Agent_最终交付方案.md
+├── runs/official_submit_20260520_132026_70222083.json
+├── autosolver_agent/
+├── web_agent_demo/
+├── tools/
+├── tests/agent_capabilities/
+└── MANIFEST.txt
+```
+
 官方提交前安全检查：
 
 ```bash
@@ -100,6 +152,11 @@ FOR_AutoSolver/
 - `solver.py`
 - `README.md`
 - `AGENTS.md`
+- `AutoSolver_Agent_最终交付方案.md`
+- `tools/agent_trace_demo.py`
+- `tools/render_lineage.py`
+- `tools/make_submission.py`
+- `tests/agent_capabilities/`
 - `runs/experiment_status_2045.md`
 - 关键官方结果 JSON：`runs/official_submit_20260520_132026_70222083.json`
 

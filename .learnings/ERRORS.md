@@ -4,6 +4,34 @@ Command failures and integration errors.
 
 ---
 
+## [ERR-20260527-TRACE-RENDER-ORDER] parallel_trace_render_race
+
+**Logged**: 2026-05-27T22:10:00+08:00
+**Priority**: low
+**Status**: fixed
+**Area**: delivery_tooling
+
+### Summary
+`tools/render_lineage.py runs/demo_trace_large301.json` was launched in parallel with trace generation and failed because the JSON file had not been created yet.
+
+### Error
+```text
+FileNotFoundError: [Errno 2] No such file or directory: 'runs/demo_trace_large301.json'
+```
+
+### Context
+- Command sequence attempted to generate trace JSON and render DOT at the same time.
+- `render_lineage.py` correctly requires an existing trace JSON input.
+
+### Suggested Fix
+Run trace generation first, wait for it to finish, then run `render_lineage.py` serially.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `tools/agent_trace_demo.py`, `tools/render_lineage.py`, `runs/demo_trace_large301.json`
+
+---
+
 ## [ERR-20260521-STRICT-REVIEW-PATCH-CONTEXT]
 
 **Logged**: 2026-05-21T00:00:00+08:00

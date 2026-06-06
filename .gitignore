@@ -1,29 +1,6 @@
-# Python
 __pycache__/
 *.pyc
-*.py
-*.pyd
-.pytest_cache/
-.mypy_cache/
-
-# Virtual env
-venv/
-.venv/
-env/
-
-# macOS
 .DS_Store
-
-# IDE / local config
-.vscode/
-.idea/
-
-# Claude / Codex local settings
-.claude/
-.codex/
-
-# Environment / secrets
 .env
-.env.*
-*.key
-*.pem
+.venv/
+venv/

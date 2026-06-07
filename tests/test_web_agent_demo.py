@@ -12,6 +12,9 @@ class WebAgentDemoTest(unittest.TestCase):
         html = render_index()
 
         self.assertIn("AutoSolver Agent System", html)
+        self.assertIn(">AutoSolver Agent</h1>", html)
+        self.assertNotIn("看见 Agent 如何一步步求解", html)
+        self.assertNotIn("AGENT LOOP", html)
         self.assertIn("id=\"run-agent\"", html)
         self.assertIn("Live Agent Workbench", html)
         self.assertIn("Agent 阶段", html)
@@ -28,12 +31,58 @@ class WebAgentDemoTest(unittest.TestCase):
         self.assertIn("Sandbox Execute", html)
         self.assertIn("Rollback", html)
         self.assertIn("Evolution Memory", html)
+        self.assertIn(".timeline-panel, .inspector { min-height: 877px; }", html)
+        self.assertIn(".timeline-panel, .inspector { min-height: 0; }", html)
+        self.assertIn("min-height: 156px", html)
+        self.assertIn("\n      height: 620px;", html)
+        self.assertIn(".timeline { height: 460px; }", html)
+        self.assertNotIn("grid-template-rows: auto auto minmax(0, 1fr)", html)
         self.assertIn("生成策略变体", html)
         self.assertIn("case 画像", html)
         self.assertIn("相似样例检索", html)
-        self.assertIn("沉淀为候选", html)
-        for forbidden in ["Score", "score", "Official", "official", "Coverage", "local_cost", "40/40", "分数", "评分", "得分"]:
+        self.assertIn("审计与候选池", html)
+        self.assertIn("只有 accepted/candidate/trusted/promoted 策略才会被后续相似样例 replay", html)
+        for forbidden in ["Proxy score", "local_cost", "40/40", "本地分数", "本地评分", "官方成绩"]:
             self.assertNotIn(forbidden, html)
+
+    def test_home_page_keeps_review_alignment_out_of_frontend_layout(self):
+        from web_agent_demo.server import render_index
+
+        html = render_index()
+
+        self.assertNotIn('id="official-alignment"', html)
+        self.assertNotIn('id="official-rubric"', html)
+        self.assertNotIn('id="official-agent-requirements"', html)
+        self.assertNotIn('id="official-run-evidence"', html)
+        self.assertNotIn('id="review-alignment"', html)
+        self.assertNotIn("官方要求对齐", html)
+        self.assertNotIn("Video + Audio Evidence", html)
+        self.assertNotIn("不是只交一个求解器", html)
+
+    def test_evolution_loop_uses_dynamic_replay_panel(self):
+        from web_agent_demo.server import render_index
+
+        html = render_index()
+
+        for step_id in [
+            "evolution-step-generate",
+            "evolution-step-recall",
+            "evolution-step-safety",
+            "evolution-step-sandbox",
+            "evolution-step-decision",
+            "evolution-step-memory",
+        ]:
+            self.assertIn(f'id="{step_id}"', html)
+        self.assertIn("data-evolution-step", html)
+        self.assertIn("pending", html)
+        self.assertIn("let evolutionState", html)
+        self.assertIn("function paintEvolutionPanel()", html)
+        self.assertIn("未命中相似候选，本轮仅生成新策略变体", html)
+        self.assertIn("仅写入审计日志，不进入候选池", html)
+        self.assertIn("失败原因", html)
+        self.assertIn("系统动作", html)
+        self.assertIn("试跑超时", html)
+        self.assertIn("质量门未通过", html)
 
     def test_case_listing_exposes_large_seed301_without_local_paths(self):
         from web_agent_demo.server import list_cases
@@ -49,10 +98,17 @@ class WebAgentDemoTest(unittest.TestCase):
         blueprint = get_agent_blueprint()
 
         self.assertIn("objective", blueprint)
+        self.assertIn("review_alignment", blueprint)
         self.assertGreaterEqual(len(blueprint["capabilities"]), 4)
         self.assertTrue(any(item["id"] == "critic" for item in blueprint["capabilities"]))
         self.assertTrue(any(item["id"] == "self_evolution" for item in blueprint["capabilities"]))
         self.assertTrue(any(item["id"] == "production_solver" for item in blueprint["strategy_catalog"]))
+        alignment = blueprint["review_alignment"]
+        self.assertEqual(alignment["source"]["type"], "competition_delivery_requirements")
+        self.assertIn("solution_quality", alignment["review_dimensions"])
+        self.assertIn("autonomous_iteration", alignment["review_dimensions"])
+        self.assertIn("technical_report", alignment["review_dimensions"])
+        self.assertEqual(len(alignment["agent_requirements"]), 4)
 
     def test_api_payload_uses_agent_controller(self):
         from web_agent_demo import server

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 
-DATA_DIR_NAME = "Fwd_ 【美团AI Hackathon大赛】-【命题四AutoSolver：让AI Agent 自主求解配送分配问题】脱敏数据"
+DATA_DIR_NAME = "data/official_cases"
 GENERATED_CASE_DIR = "generated_cases"
 HEADER = "task_id_list\tcourier_id\ttotal_score\twillingness"
 

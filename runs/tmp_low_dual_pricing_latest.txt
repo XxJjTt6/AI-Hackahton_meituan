@@ -1,3 +1,0 @@
-base 1199.1284207596611 groups 30 k Counter({2: 30})
-cols 2838 per_task_minmax 76 108
-no feasible

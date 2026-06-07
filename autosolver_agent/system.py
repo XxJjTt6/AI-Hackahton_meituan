@@ -52,6 +52,64 @@ AGENT_BLUEPRINT = {
 }
 
 
+REVIEW_ALIGNMENT = {
+    "source": {
+        "type": "competition_delivery_requirements",
+        "note": "Used to keep the demo aligned with final reproduction expectations, not as an official scoring rule.",
+    },
+    "review_dimensions": {
+        "solution_quality": {
+            "label": "最终解质量",
+            "description": "正式结果以官方评测为准；页面不把本地 Critic 信号包装成官方成绩。",
+        },
+        "autonomous_iteration": {
+            "label": "Agent 自主迭代能力",
+            "description": "展示自主策略探索、自动评估筛选、历史驱动迭代和自进化实验闭环。",
+        },
+        "technical_report": {
+            "label": "技术报告与证据",
+            "description": "用架构图、运行截图、trace、测试和打包证据解释系统边界。",
+        },
+    },
+    "agent_requirements": [
+        {
+            "id": "autonomous_strategy_exploration",
+            "title": "自主策略探索",
+            "description": "Agent 自主提出并尝试 greedy、matching、column-search、flow 和 production solver 等策略。",
+            "evidence": "round_start / attempt_start events",
+        },
+        {
+            "id": "automatic_evaluation_filtering",
+            "title": "自动评估与筛选",
+            "description": "Critic 自动判断候选是否合法、是否更新 best-so-far，并保留拒绝原因。",
+            "evidence": "attempt_result / best_update events",
+        },
+        {
+            "id": "iterative_improvement_loop",
+            "title": "迭代改进循环",
+            "description": "Controller 根据历史实验结果和 case profile 调整下一轮策略方向。",
+            "evidence": "adapt / evolution_replay events",
+        },
+        {
+            "id": "current_best_output",
+            "title": "当前最优输出",
+            "description": "系统持续维护 best-so-far，预算临近时输出当前最优合法方案。",
+            "evidence": "best_update / final events",
+        },
+    ],
+    "runtime_boundary": {
+        "best_so_far_window_s": "2-5",
+        "per_case_budget_s": 10,
+        "description": "页面解释 best-so-far 过程；正式求解热路径按每个样例 10 秒边界设计。",
+    },
+    "non_goals": [
+        "不展示本地 cost 为官方成绩",
+        "不展示 40/40 为官方结论",
+        "网页自进化实验不直接改写正式 solver.py 热路径",
+    ],
+}
+
+
 @dataclass(frozen=True)
 class StrategyAttempt:
     name: str
@@ -64,6 +122,7 @@ class StrategyAttempt:
 def get_agent_blueprint() -> dict[str, Any]:
     return {
         **AGENT_BLUEPRINT,
+        "review_alignment": REVIEW_ALIGNMENT,
         "strategy_catalog": [
             {"id": "greedy_baseline", "label": "贪心基线", "type": "baseline"},
             {"id": "single_multidispatch", "label": "单任务多派", "type": "heuristic"},
@@ -75,6 +134,34 @@ def get_agent_blueprint() -> dict[str, Any]:
             {"id": "scarce_bundle_mcf", "label": "Scarce Bundle MCF", "type": "flow"},
             {"id": "production_solver", "label": "生产级综合求解器", "type": "anytime-portfolio"},
         ],
+    }
+
+
+def _review_alignment_report(
+    rounds: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    best: dict[str, Any],
+    wall_time_s: float,
+    budget_s: float,
+) -> dict[str, Any]:
+    event_types = [str(event.get("type", "")) for event in events]
+    strategy_attempts = sum(len(round_payload.get("strategies", [])) for round_payload in rounds)
+    critic_decisions = sum(1 for event_type in event_types if event_type == "attempt_result")
+    return {
+        **REVIEW_ALIGNMENT,
+        "alignment_evidence": {
+            "strategy_attempts": strategy_attempts,
+            "critic_decisions": critic_decisions,
+            "accepted_updates": sum(1 for event_type in event_types if event_type == "best_update"),
+            "has_autonomous_exploration": strategy_attempts > 0 and "round_start" in event_types,
+            "has_automatic_evaluation": critic_decisions > 0,
+            "has_iterative_adaptation": "adapt" in event_types or len(rounds) > 1,
+            "has_self_evolution_track": any(event_type.startswith("evolution_") for event_type in event_types),
+            "has_current_best_output": "final" in event_types and bool(best.get("valid")),
+            "runtime_budget_s": budget_s,
+            "wall_time_s": wall_time_s,
+            "best_strategy": best.get("strategy"),
+        },
     }
 
 
@@ -105,6 +192,88 @@ def _solution_record(
         "riders_per_group": summary["riders_per_group"],
         "tasks_per_group": summary["tasks_per_group"],
         "invalid_reasons": summary["invalid_reasons"],
+    }
+
+
+def _case_quality_gate_text(case_profile: dict[str, Any] | None) -> dict[str, str]:
+    profile = case_profile or {}
+    regime = str(profile.get("regime", "") or "")
+    tasks = int(profile.get("tasks", 0) or 0)
+    couriers = int(profile.get("couriers", 0) or 0)
+    rows = int(profile.get("rows", 0) or 0)
+    has_bundles = bool(profile.get("has_bundles", False))
+    if regime == "low-willingness":
+        return {
+            "reason_label": "低意愿试跑未优于基线",
+            "reason_detail": f"低意愿质量门未通过：实验策略按时返回，但没有超过 stable baseline 的低接受率风险控制；本轮画像为 {tasks} 任务、{couriers} 骑手、{rows} 行候选。",
+            "rollback_label": "回退到低意愿 baseline",
+        }
+    if regime == "scarce":
+        return {
+            "reason_label": "稀缺骑手试跑未优于基线",
+            "reason_detail": f"稀缺骑手质量门未通过：实验策略按时返回，但没有超过 stable baseline 的骑手复用规避和 bundle 取舍；本轮画像为 {tasks} 任务、{couriers} 骑手、{rows} 行候选。",
+            "rollback_label": "回退到稀缺 baseline",
+        }
+    if regime == "tiny":
+        return {
+            "reason_label": "Tiny 试跑未优于基线",
+            "reason_detail": f"Tiny 质量门未通过：样例规模很小，stable baseline 已能快速覆盖核心选择，实验排序没有产生更好的替代结构；本轮画像为 {tasks} 任务、{couriers} 骑手。",
+            "rollback_label": "回退到 tiny baseline",
+        }
+    if regime == "large":
+        return {
+            "reason_label": "大规模试跑未优于基线",
+            "reason_detail": f"大规模质量门未通过：实验策略按时返回，但没有超过 stable baseline 的组合搜索和局部改进链；本轮画像为 {tasks} 任务、{couriers} 骑手、{rows} 行候选。",
+            "rollback_label": "回退到 large baseline",
+        }
+    if regime in {"medium", "small"}:
+        bundle_text = "bundle 冲突" if has_bundles else "单任务候选"
+        return {
+            "reason_label": f"{'中型' if regime == 'medium' else '小型'}样例试跑未优于基线",
+            "reason_detail": f"{'中型' if regime == 'medium' else '小型'}样例质量门未通过：实验策略按时返回，但没有超过 stable baseline 对 {bundle_text} 的筛选；本轮画像为 {tasks} 任务、{couriers} 骑手、{rows} 行候选。",
+            "rollback_label": f"回退到 {regime} baseline",
+        }
+    return {
+        "reason_label": "质量门未通过",
+        "reason_detail": "质量门未通过：实验策略按时返回，但没有优于当前 stable baseline，因此拒绝采用。",
+        "rollback_label": "回退到 stable baseline",
+    }
+
+
+def _evolution_trial_display(reason: str, accepted: bool, case_profile: dict[str, Any] | None = None) -> dict[str, str]:
+    if accepted:
+        return {
+            "reason_label": "试跑通过",
+            "reason_detail": "试跑通过：实验策略没有造成质量回退，可进入候选池。",
+            "decision_action": "系统动作：进入候选池，可供后续相似样例 replay。",
+            "rollback_label": "晋升为可复用候选",
+        }
+    if reason == "timeout":
+        reason_label = "试跑超时"
+        reason_detail = "试跑超时：实验策略未在短时间沙箱窗口内返回，本轮终止试跑。"
+        rollback_label = "回退：试跑超时"
+    elif reason == "quality regression":
+        quality_text = _case_quality_gate_text(case_profile)
+        reason_label = quality_text["reason_label"]
+        reason_detail = quality_text["reason_detail"]
+        rollback_label = quality_text["rollback_label"]
+    elif reason == "invalid output format":
+        reason_label = "输出格式无效"
+        reason_detail = "输出格式无效：策略返回内容不符合 propose 接口要求。"
+        rollback_label = "回退：输出无效"
+    elif "unsafe" in reason or "propose" in reason or "syntax error" in reason or "load error" in reason:
+        reason_label = "安全门拒绝"
+        reason_detail = "安全门拒绝：代码未通过 AST/import/interface 检查。"
+        rollback_label = "回退：安全门拒绝"
+    else:
+        reason_label = "试跑拒绝"
+        reason_detail = f"试跑拒绝：{reason}。"
+        rollback_label = "回退到 stable baseline"
+    return {
+        "reason_label": reason_label,
+        "reason_detail": reason_detail,
+        "decision_action": "系统动作：回退到 stable baseline，solver.py 未修改。",
+        "rollback_label": rollback_label,
     }
 
 
@@ -381,24 +550,30 @@ def run_agent(
             adaptive_added = True
             if safety.passed:
                 baseline_cost = float(best_record["local_cost"])
+                trial_budget_s = min(0.15, max(0.02, deadline - time.monotonic() - 0.25))
                 outcome = evolution.run_generated_strategy(
                     generated_strategy,
                     candidates,
                     all_tasks,
-                    deadline_s=min(0.15, max(0.02, deadline - time.monotonic() - 0.25)),
+                    deadline_s=trial_budget_s,
                     helpers=evolution_helpers(),
                     baseline_cost=baseline_cost,
                     score_fn=lambda solution: _score(module, solution, candidates, all_tasks),
                     summarize_fn=lambda solution, cost: summarize_solution(solution, candidates, all_tasks, cost),
                     case_profile=case_profile,
                 )
+                trial_display = _evolution_trial_display(outcome.reason, outcome.accepted, case_profile)
                 emit(
                     {
                         "type": "evolution_trial",
-                        "message": f"实验策略 {outcome.strategy_id} {outcome.decision}：{outcome.reason}；失败不会影响 stable baseline。",
+                        "message": f"实验策略 {outcome.strategy_id} {outcome.decision}：{trial_display['reason_detail']} {trial_display['decision_action']}",
                         "strategy_id": outcome.strategy_id,
                         "decision": outcome.decision,
                         "accepted": outcome.accepted,
+                        "reason": outcome.reason,
+                        "elapsed_ms": outcome.elapsed_ms,
+                        "trial_budget_ms": round(trial_budget_s * 1000.0, 3),
+                        **trial_display,
                     }
                 )
                 if outcome.accepted:
@@ -417,6 +592,8 @@ def run_agent(
                             "message": f"实验策略 {outcome.strategy_id} 已回退到 stable baseline；solver.py 未被修改。",
                             "strategy_id": outcome.strategy_id,
                             "decision": "rollback",
+                            "decision_action": trial_display["decision_action"],
+                            "rollback_label": trial_display["rollback_label"],
                         }
                     )
                 if outcome.accepted and outcome.solution:
@@ -514,11 +691,12 @@ def run_agent(
             "coverage": f"{best_record['covered_tasks']}/{best_record['total_tasks']}",
         }
     )
+    wall_time_s = round(time.monotonic() - started, 6)
     return {
         "status": "ok",
         "case_id": case_id,
         "regime": regime,
-        "wall_time_s": round(time.monotonic() - started, 6),
+        "wall_time_s": wall_time_s,
         "budget_s": budget_s,
         "features": features,
         "evolution": {
@@ -541,6 +719,7 @@ def run_agent(
             "internal_signal": "The ranking signal is internal to the controller and hidden from the web demo.",
             "presentation_rule": "The web demo only presents agent decisions and tool flow.",
         },
+        "review_alignment": _review_alignment_report(rounds, events, best, wall_time_s, budget_s),
         "best": best,
         "rounds": rounds,
         "events": events,

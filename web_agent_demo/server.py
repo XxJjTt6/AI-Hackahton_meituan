@@ -21,7 +21,7 @@ except ImportError:  # The demo can still run before optional synthetic cases ar
     ensure_sample_cases = None
 
 
-DATA_DIR = ROOT / "Fwd_ 【美团AI Hackathon大赛】-【命题四AutoSolver：让AI Agent 自主求解配送分配问题】脱敏数据"
+DATA_DIR = ROOT / "data" / "official_cases"
 GENERATED_CASE_DIR = ROOT / "web_agent_demo" / "generated_cases"
 CASE_FILES = {
     "large_seed301": DATA_DIR / "large_seed301.txt",
@@ -117,17 +117,6 @@ def render_index() -> str:
       margin-bottom: 18px;
     }
     .hero { padding: 28px; position: relative; overflow: hidden; }
-    .hero:after {
-      content: "AGENT LOOP";
-      position: absolute;
-      right: -18px;
-      bottom: -8px;
-      color: rgba(22,33,30,.055);
-      font-weight: 900;
-      font-size: clamp(54px, 10vw, 148px);
-      letter-spacing: -.08em;
-      pointer-events: none;
-    }
     .eyebrow { color: var(--leaf); font-weight: 900; letter-spacing: .16em; text-transform: uppercase; font-size: 12px; }
     h1 { font-size: clamp(32px, 4.3vw, 58px); line-height: .96; margin: 12px 0 14px; letter-spacing: -0.06em; max-width: 880px; }
     h2 { margin: 0; font-size: 22px; letter-spacing: -0.035em; }
@@ -176,18 +165,21 @@ def render_index() -> str:
       align-items: start;
     }
     .rail, .timeline-panel, .inspector, .table-panel, .evolution-panel { padding: 20px; }
-    .rail { position: sticky; top: 18px; }
+    .rail, .timeline-panel, .inspector { min-height: 877px; }
+    .rail { position: sticky; top: 18px; display: flex; flex-direction: column; }
     .objective {
       margin: 14px 0 18px;
       color: var(--muted);
       line-height: 1.65;
       font-size: 14px;
     }
-    .stage-list { display: grid; gap: 10px; }
+    .stage-list { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
     .stage {
       display: grid;
       grid-template-columns: 36px 1fr;
       gap: 10px;
+      align-items: center;
+      flex: 1 0 auto;
       padding: 12px;
       border-radius: 18px;
       background: var(--card);
@@ -254,6 +246,7 @@ def render_index() -> str:
       display: grid;
       grid-template-columns: 90px 1fr;
       gap: 12px;
+      min-height: 156px;
       padding: 14px;
       border-radius: 18px;
       background: rgba(255,255,255,.70);
@@ -348,7 +341,13 @@ def render_index() -> str:
       background:
         radial-gradient(circle at 12% 14%, rgba(216,177,74,.18), transparent 5.2rem),
         rgba(255,255,255,.66);
+      transition: border-color .2s ease, background .2s ease, transform .2s ease;
     }
+    .loop-step.running { border-color: rgba(46,95,115,.58); background: rgba(232,244,248,.82); transform: translateY(-2px); }
+    .loop-step.pass { border-color: rgba(35,106,67,.58); background: rgba(239,248,228,.84); }
+    .loop-step.fail { border-color: rgba(201,113,74,.52); background: rgba(255,242,233,.82); }
+    .loop-step.muted { border-color: rgba(22,33,30,.12); background: rgba(255,255,255,.50); }
+    .loop-step.pending { border-color: var(--line); }
     .loop-step:after {
       content: ">";
       position: absolute;
@@ -371,7 +370,22 @@ def render_index() -> str:
       text-transform: uppercase;
     }
     .loop-step b { display: block; margin-bottom: 7px; }
-    .loop-step span:last-child { color: var(--muted); line-height: 1.45; font-size: 13px; }
+    .loop-status {
+      display: block;
+      color: var(--ink);
+      font-weight: 900;
+      line-height: 1.4;
+      font-size: 13px;
+    }
+    .loop-detail {
+      margin-top: 7px;
+      color: var(--muted);
+      line-height: 1.45;
+      font-size: 13px;
+    }
+    .loop-step.pass .loop-status { color: var(--leaf); }
+    .loop-step.fail .loop-status { color: var(--clay); }
+    .loop-step.running .loop-status { color: var(--blue); }
     .table-panel { margin-top: 18px; }
     .attempt-grid { display: grid; gap: 10px; margin-top: 14px; }
     .attempt {
@@ -415,6 +429,7 @@ def render_index() -> str:
       .workbench, .topbar { grid-template-columns: 1fr; }
       .code-loop { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .rail, .inspector { position: static; }
+      .rail, .timeline-panel, .inspector { min-height: 0; }
       .timeline { height: 460px; }
     }
     @media (max-width: 760px) {
@@ -430,8 +445,8 @@ def render_index() -> str:
   <div class="topbar">
     <section class="hero panel">
       <div class="eyebrow">Live Agent Workbench</div>
-      <h1>看见 Agent 如何一步步求解</h1>
-      <p class="lead">页面重点展示运行过程，而不是静态成绩。启动后可以从阶段轨道、实时事件流、右侧检查器和候选表里看到 Planner 提案、Executor 调用、Critic 接受/拒绝、Controller 调整、Memory 保留 best-so-far，以及 Evolution 将有效策略沉淀为后续样例的候选。</p>
+      <h1>AutoSolver Agent</h1>
+      <p class="lead">页面重点展示运行过程，而不是静态成绩。启动后可以从阶段轨道、实时事件流、右侧检查器和候选表里看到 Planner 提案、Executor 调用、Critic 接受/拒绝、Controller 调整、Memory 保留 best-so-far，以及 Evolution 记录生成实验并仅复用已接受候选。</p>
     </section>
     <section class="controls panel">
       <div class="control-row">
@@ -465,7 +480,7 @@ def render_index() -> str:
       <h2>当前检查器</h2>
       <div class="metrics">
         <div class="metric"><strong id="metric-events">0</strong><span>Events</span></div>
-        <div class="metric"><strong id="metric-accepted">0</strong><span>Memory</span></div>
+        <div class="metric"><strong id="metric-accepted">0</strong><span>Accepted</span></div>
         <div class="metric"><strong id="metric-round">0</strong><span>Round</span></div>
       </div>
       <div class="inspect-card"><b>当前阶段</b><div id="current-stage">等待启动。</div></div>
@@ -480,23 +495,23 @@ def render_index() -> str:
     <div class="evolution-head">
       <div>
         <h2>Self-Evolving Code Loop</h2>
-        <p>这个区域展示 Agent 如何把“输出经验”沉淀成后续输入：生成策略变体，记录 case 画像，按相似样例检索，再经过验证、试跑、回退或晋升。正式 `solver.py` 始终作为 stable baseline，不被网页实验直接改写。</p>
+        <p>这个区域展示 Agent 的实验轨道：生成策略变体，记录 case 画像，按相似样例检索，再经过验证、试跑、回退或晋升。正式 `solver.py` 始终作为 stable baseline，不被网页实验直接改写。</p>
       </div>
       <div class="loop-badge">Experimental Track</div>
     </div>
     <div class="code-loop">
-      <div class="loop-step"><span class="loop-tag">Generate</span><b>生成策略变体</b><span>Planner 根据 regime、case 画像和历史记忆产生候选 Python 策略。</span></div>
-      <div class="loop-step"><span class="loop-tag">Safety Gate</span><b>代码门禁</b><span>AST 检查导入、危险调用和 propose 接口。</span></div>
-      <div class="loop-step"><span class="loop-tag">Sandbox Execute</span><b>限时试跑</b><span>Executor 只给短时间片，失败不会进入主方案。</span></div>
-      <div class="loop-step"><span class="loop-tag">Critic Decision</span><b>质量裁决</b><span>Critic 用内部信号判断接受、拒绝或继续搜索。</span></div>
-      <div class="loop-step"><span class="loop-tag">Rollback</span><b>安全回退</b><span>未通过验证或效果变差时回到 stable baseline。</span></div>
-      <div class="loop-step"><span class="loop-tag">Evolution Memory</span><b>沉淀为候选</b><span>保存策略、case 画像和验证结果，下个相似样例优先检索 replay。</span></div>
+      <div class="loop-step pending" id="evolution-step-generate" data-evolution-step="generate"><span class="loop-tag">Generate</span><b>生成策略变体</b><span class="loop-status" id="evolution-generate-status">等待本轮开始</span><div class="loop-detail" id="evolution-generate-detail">启动后显示本次生成的策略变体 ID 和 case 画像。</div></div>
+      <div class="loop-step pending" id="evolution-step-recall" data-evolution-step="recall"><span class="loop-tag">Recall</span><b>相似历史检索</b><span class="loop-status" id="evolution-recall-status">等待检索</span><div class="loop-detail" id="evolution-recall-detail">如果没有历史候选，会显示：未命中相似候选，本轮仅生成新策略变体。</div></div>
+      <div class="loop-step pending" id="evolution-step-safety" data-evolution-step="safety"><span class="loop-tag">Safety Gate</span><b>代码门禁</b><span class="loop-status" id="evolution-safety-status">等待策略生成</span><div class="loop-detail" id="evolution-safety-detail">AST 检查导入、危险调用和 propose 接口。</div></div>
+      <div class="loop-step pending" id="evolution-step-sandbox" data-evolution-step="sandbox"><span class="loop-tag">Sandbox Execute</span><b>限时试跑</b><span class="loop-status" id="evolution-sandbox-status">等待门禁结果</span><div class="loop-detail" id="evolution-sandbox-detail">通过门禁后才会进入短时间片试跑。</div></div>
+      <div class="loop-step pending" id="evolution-step-decision" data-evolution-step="decision"><span class="loop-tag">Decision</span><b>回退/晋升决策</b><span class="loop-status" id="evolution-decision-status">等待试跑结果</span><div class="loop-detail" id="evolution-decision-detail">Critic 对比 stable baseline，决定 rollback 或 promote。</div></div>
+      <div class="loop-step pending" id="evolution-step-memory" data-evolution-step="memory"><span class="loop-tag">Evolution Memory</span><b>审计与候选池</b><span class="loop-status" id="evolution-memory-status">等待沉淀</span><div class="loop-detail" id="evolution-memory-detail">所有生成、验证、试跑都会写入审计记忆；只有 accepted/candidate/trusted/promoted 策略才会被后续相似样例 replay。</div></div>
     </div>
   </section>
 
   <section class="table-panel panel">
     <h2>策略候选表</h2>
-    <div id="rounds" class="attempt-grid"><div class="empty">候选表会在每轮运行后更新：展示每个策略的用途、耗时、以及是否进入 Memory。</div></div>
+    <div id="rounds" class="attempt-grid"><div class="empty">候选表会在每轮运行后更新：展示每个策略的用途、耗时、以及是否更新 best-so-far。</div></div>
   </section>
 </main>
 <script>
@@ -508,14 +523,15 @@ let activeFilter = 'all';
 let autoScroll = true;
 let compactView = false;
 let acceptedCount = 0;
+let evolutionState = initialEvolutionState();
 const stages = [
   ['perception', 'Perception', '读取 case，识别任务、骑手、bundle 和意愿分布。'],
   ['planner', 'Planner', '提出本轮策略批次，并说明尝试原因。'],
   ['executor', 'Executor', '实际调用候选生成或生产级 solver。'],
-  ['critic', 'Critic', '判断候选是否有效，是否进入 Memory。'],
+  ['critic', 'Critic', '判断候选是否有效，是否更新 best-so-far。'],
   ['controller', 'Controller', '根据结果决定下一轮方向和预算处理。'],
   ['memory', 'Memory', '保留 best-so-far，最终输出方案。'],
-  ['evolution', 'Evolution', 'Self-Evolving Code Loop：生成策略变体，沉淀 case 画像和验证结果，再按相似样例检索复用。'],
+  ['evolution', 'Evolution', 'Self-Evolving Code Loop：生成策略变体，记录 case 画像和验证结果，只复用已接受的相似历史候选。'],
 ];
 const filterItems = [
   ['all', '全部'],
@@ -528,6 +544,205 @@ const filterItems = [
 ];
 function safe(text) {
   return String(text ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+function initialEvolutionState() {
+  return {
+    generatedStrategy: null,
+    trustedDetails: [],
+    caseProfile: null,
+    steps: {
+      generate: {
+        className: 'pending',
+        status: '等待本轮开始',
+        detail: '启动后显示本次生成的策略变体 ID 和 case 画像。',
+      },
+      recall: {
+        className: 'pending',
+        status: '等待检索',
+        detail: '如果没有历史候选，会显示：未命中相似候选，本轮仅生成新策略变体。',
+      },
+      safety: {
+        className: 'pending',
+        status: '等待策略生成',
+        detail: 'AST 检查导入、危险调用和 propose 接口。',
+      },
+      sandbox: {
+        className: 'pending',
+        status: '等待门禁结果',
+        detail: '通过门禁后才会进入短时间片试跑。',
+      },
+      decision: {
+        className: 'pending',
+        status: '等待试跑结果',
+        detail: 'Critic 对比 stable baseline，决定 rollback 或 promote。',
+      },
+      memory: {
+        className: 'pending',
+        status: '等待沉淀',
+        detail: '所有生成、验证、试跑都会写入审计记忆；只有 accepted/candidate/trusted/promoted 策略才会被后续相似样例 replay。',
+      },
+    },
+  };
+}
+function setEvolutionStep(step, className, status, detail) {
+  if (!evolutionState || !evolutionState.steps[step]) return;
+  evolutionState.steps[step] = {className, status, detail};
+}
+function formatSimilarity(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toFixed(2) : '0.00';
+}
+function bestSimilarityFrom(values) {
+  const numbers = (values || []).map(item => Number(item)).filter(Number.isFinite);
+  return numbers.length ? Math.max(...numbers) : 0;
+}
+function summarizeCaseProfile(profile) {
+  if (!profile) return 'case profile 等待最终 report 补全。';
+  const willingness = Number(profile.avg_willingness);
+  const willingnessText = Number.isFinite(willingness) ? willingness.toFixed(3) : 'unknown';
+  return `regime ${profile.regime ?? 'unknown'} · tasks ${profile.tasks ?? '?'} · couriers ${profile.couriers ?? '?'} · rows ${profile.rows ?? '?'} · avg willingness ${willingnessText} · bundles ${profile.has_bundles ? 'yes' : 'no'}`;
+}
+function summarizeTrusted(details) {
+  if (!details || !details.length) return '未命中相似候选，本轮仅生成新策略变体。';
+  const best = Math.max(...details.map(item => Number(item.similarity || 0)).filter(Number.isFinite));
+  const ids = details.slice(0, 3).map(item => item.strategy_id).filter(Boolean).join(', ');
+  return `命中 ${details.length} 个相似候选，最高相似度 ${formatSimilarity(best)}${ids ? `：${ids}` : ''}。`;
+}
+function fallbackEvolutionReason(reason, accepted) {
+  if (accepted) {
+    return {
+      reasonLabel: '试跑通过',
+      reasonDetail: '试跑通过：实验策略没有造成质量回退，可进入候选池。',
+      decisionAction: '系统动作：进入候选池，可供后续相似样例 replay。',
+    };
+  }
+  const value = String(reason || '').trim();
+  if (value === 'timeout') {
+    return {
+      reasonLabel: '试跑超时',
+      reasonDetail: '试跑超时：实验策略未在短时间沙箱窗口内返回，本轮终止试跑。',
+      decisionAction: '系统动作：回退到 stable baseline，solver.py 未修改。',
+    };
+  }
+  if (value === 'quality regression') {
+    return {
+      reasonLabel: '质量门未通过',
+      reasonDetail: '质量门未通过：实验策略按时返回，但没有优于当前 stable baseline，因此拒绝采用。',
+      decisionAction: '系统动作：回退到 stable baseline，solver.py 未修改。',
+    };
+  }
+  if (value === 'invalid output format') {
+    return {
+      reasonLabel: '输出格式无效',
+      reasonDetail: '输出格式无效：策略返回内容不符合 propose 接口要求。',
+      decisionAction: '系统动作：回退到 stable baseline，solver.py 未修改。',
+    };
+  }
+  if (value.includes('unsafe') || value.includes('propose') || value.includes('syntax error') || value.includes('load error')) {
+    return {
+      reasonLabel: '安全门拒绝',
+      reasonDetail: '安全门拒绝：代码未通过 AST/import/interface 检查。',
+      decisionAction: '系统动作：回退到 stable baseline，solver.py 未修改。',
+    };
+  }
+  return {
+    reasonLabel: '试跑拒绝',
+    reasonDetail: `试跑拒绝：${value || 'unknown reason'}。`,
+    decisionAction: '系统动作：回退到 stable baseline，solver.py 未修改。',
+  };
+}
+function describeEvolutionTrial(payload) {
+  const fallback = fallbackEvolutionReason(payload?.reason, Boolean(payload?.accepted));
+  return {
+    reasonLabel: payload?.reason_label || fallback.reasonLabel,
+    reasonDetail: payload?.reason_detail || fallback.reasonDetail,
+    decisionAction: payload?.decision_action || fallback.decisionAction,
+  };
+}
+function paintEvolutionPanel() {
+  if (!evolutionState) evolutionState = initialEvolutionState();
+  Object.entries(evolutionState.steps).forEach(([step, data]) => {
+    const node = $(`evolution-step-${step}`);
+    const status = $(`evolution-${step}-status`);
+    const detail = $(`evolution-${step}-detail`);
+    if (!node || !status || !detail) return;
+    node.classList.remove('pending', 'running', 'pass', 'fail', 'muted');
+    node.classList.add(data.className || 'pending');
+    status.textContent = data.status;
+    detail.textContent = data.detail;
+  });
+}
+function updateEvolutionFromEvent(payload) {
+  if (!payload.type || !payload.type.startsWith('evolution_')) return;
+  if (!evolutionState) evolutionState = initialEvolutionState();
+  const strategyId = payload.strategy_id || evolutionState.generatedStrategy || 'unknown strategy';
+  if (payload.type === 'evolution_recall') {
+    const strategies = payload.strategies || [];
+    const similarities = payload.similarity || [];
+    evolutionState.trustedDetails = strategies.map((strategy, index) => ({
+      strategy_id: strategy,
+      similarity: similarities[index] || 0,
+    }));
+    setEvolutionStep(
+      'recall',
+      strategies.length ? 'pass' : 'muted',
+      strategies.length ? `命中 ${strategies.length} 个历史候选` : '未命中相似候选',
+      strategies.length ? `最高相似度 ${formatSimilarity(bestSimilarityFrom(similarities))}；候选 ${strategies.slice(0, 3).join(', ')}。` : '未命中相似候选，本轮仅生成新策略变体。'
+    );
+  }
+  if (payload.type === 'evolution_generate') {
+    evolutionState.generatedStrategy = payload.strategy_id || strategyId;
+    setEvolutionStep('generate', 'pass', `生成 ${evolutionState.generatedStrategy}`, payload.message || '生成策略变体已进入实验轨道。');
+    if (evolutionState.steps.recall.className === 'pending') {
+      setEvolutionStep('recall', 'muted', '未命中相似候选', '未命中相似候选，本轮仅生成新策略变体。');
+    }
+    setEvolutionStep('safety', 'running', '正在检查代码门禁', `等待 ${evolutionState.generatedStrategy} 的 AST 和接口检查结果。`);
+  }
+  if (payload.type === 'evolution_validate') {
+    const passed = Boolean(payload.passed);
+    setEvolutionStep('safety', passed ? 'pass' : 'fail', passed ? '安全门通过' : '安全门拒绝', payload.message || `${strategyId} 门禁完成。`);
+    const safetyFailure = fallbackEvolutionReason(payload.reason || payload.message || 'unsafe', false);
+    setEvolutionStep(
+      'sandbox',
+      passed ? 'running' : 'muted',
+      passed ? '等待限时试跑' : '跳过试跑',
+      passed ? `${strategyId} 可以进入短时间片试跑。` : `失败原因：${safetyFailure.reasonDetail}`
+    );
+    if (!passed) {
+      setEvolutionStep('decision', 'fail', '拒绝并回退', safetyFailure.decisionAction);
+      setEvolutionStep('memory', 'fail', '只写入审计', '仅写入审计日志，不进入候选池。');
+    }
+  }
+  if (payload.type === 'evolution_trial') {
+    const accepted = Boolean(payload.accepted);
+    const trial = describeEvolutionTrial(payload);
+    setEvolutionStep('sandbox', accepted ? 'pass' : 'fail', trial.reasonLabel, `失败原因：${trial.reasonDetail}`);
+    setEvolutionStep(
+      'decision',
+      accepted ? 'pass' : 'fail',
+      accepted ? '准备晋升' : '准备回退',
+      trial.decisionAction
+    );
+  }
+  if (payload.type === 'evolution_replay') {
+    const accepted = Boolean(payload.accepted);
+    const similarityText = payload.similarity !== undefined ? `；相似度 ${formatSimilarity(payload.similarity)}` : '';
+    setEvolutionStep(
+      'recall',
+      accepted ? 'pass' : 'muted',
+      accepted ? '历史候选 replay 通过' : '历史候选 replay 未采纳',
+      `${strategyId} replay ${payload.decision || 'done'}${similarityText}。`
+    );
+  }
+  if (payload.type === 'evolution_rollback') {
+    setEvolutionStep('decision', 'fail', '回退到 stable baseline', '系统动作：回退到 stable baseline，solver.py 未修改。');
+    setEvolutionStep('memory', 'fail', '只写入审计', '仅写入审计日志，不进入候选池。');
+  }
+  if (payload.type === 'evolution_promote') {
+    setEvolutionStep('decision', 'pass', '晋升为可复用候选', '系统动作：进入候选池，可供后续相似样例 replay。');
+    setEvolutionStep('memory', 'pass', '进入候选池', '进入候选池，可供后续相似样例 replay。');
+  }
+  paintEvolutionPanel();
 }
 function paintBlueprint(data) {
   $('objective').textContent = data.objective;
@@ -584,7 +799,7 @@ function readableType(type) {
 }
 function titleFor(e) {
   if (e.type === 'attempt_start') return `调用 ${e.label || e.strategy}`;
-  if (e.type === 'attempt_result') return `${e.label || e.strategy}：${e.accepted ? '进入 Memory' : '暂不采用'}`;
+  if (e.type === 'attempt_result') return `${e.label || e.strategy}：${e.accepted ? '更新 best-so-far' : '暂不采用'}`;
   if (e.type === 'best_update') return 'Memory 更新 best-so-far';
   if (e.type === 'round_start') return `第 ${e.round} 轮策略规划`;
   if (e.type === 'adapt') return 'Controller 调整下一轮';
@@ -600,7 +815,7 @@ function titleFor(e) {
 }
 function bodyFor(e) {
   if (e.type === 'attempt_result') {
-    return e.accepted ? 'Critic 判断这个候选比当前 Memory 更适合，已保留为新的上下文。' : 'Critic 没有把这个候选作为当前最优，但它仍保留在候选表里便于对比。';
+    return e.accepted ? 'Critic 判断这个候选优于当前 best-so-far，已保留为新的上下文。' : 'Critic 没有把这个候选作为当前最优，但它仍保留在候选表里便于对比。';
   }
   return e.message || '';
 }
@@ -632,6 +847,7 @@ function addEvent(payload) {
     acceptedCount += 1;
     $('metric-accepted').textContent = acceptedCount;
   }
+  updateEvolutionFromEvent(payload);
   paintEvents();
 }
 function paintEvents() {
@@ -666,7 +882,7 @@ function paintAttempts(report) {
       <div class="name">${safe(s.label || s.name)}</div>
       <div class="why">${safe(s.reason || '策略执行记录')}</div>
       <div class="muted">${Math.round(s.elapsed_ms || 0)} ms · round ${safe(s.round)}</div>
-      <div class="verdict">${s.accepted ? 'Memory' : 'Reference'}</div>
+      <div class="verdict">${s.accepted ? 'Best-so-far' : 'Reference'}</div>
     </div>`).join('');
 }
 function render(report) {
@@ -676,7 +892,30 @@ function render(report) {
   if (report.evolution) {
     const recalled = report.evolution.trusted_details || [];
     const recallText = recalled.length ? `；已检索 ${recalled.length} 个相似历史候选` : '';
-    $('evolution-note').textContent = `策略变体 ${report.evolution.generated_strategy} 已写入 Evolution Memory${recallText}；模式 ${report.evolution.mode}。`;
+    const trial = (report.events || []).find(e => e.type === 'evolution_trial' && e.strategy_id === report.evolution.generated_strategy);
+    const validation = (report.events || []).find(e => e.type === 'evolution_validate' && e.strategy_id === report.evolution.generated_strategy);
+    const trialDescription = trial ? describeEvolutionTrial(trial) : null;
+    const trialText = trialDescription ? `；失败原因 ${trialDescription.reasonLabel}；${trialDescription.decisionAction.replace('系统动作：', '')}` : '；等待试跑结果';
+    $('evolution-note').textContent = `策略变体 ${report.evolution.generated_strategy} 已写入 Evolution Memory 审计日志${trialText}${recallText}；模式 ${report.evolution.mode}。`;
+    evolutionState.generatedStrategy = report.evolution.generated_strategy;
+    evolutionState.caseProfile = report.evolution.case_profile || null;
+    evolutionState.trustedDetails = recalled;
+    setEvolutionStep('generate', 'pass', `生成 ${report.evolution.generated_strategy}`, summarizeCaseProfile(report.evolution.case_profile));
+    setEvolutionStep('recall', recalled.length ? 'pass' : 'muted', recalled.length ? `命中 ${recalled.length} 个历史候选` : '未命中相似候选', summarizeTrusted(recalled));
+    if (validation) {
+      setEvolutionStep('safety', validation.passed ? 'pass' : 'fail', validation.passed ? '安全门通过' : '安全门拒绝', validation.message || '门禁结果已返回。');
+    }
+    if (trial && trialDescription) {
+      setEvolutionStep('sandbox', trial.accepted ? 'pass' : 'fail', trialDescription.reasonLabel, `失败原因：${trialDescription.reasonDetail}`);
+      setEvolutionStep('decision', trial.accepted ? 'pass' : 'fail', trial.accepted ? '晋升为可复用候选' : '回退到 stable baseline', trialDescription.decisionAction);
+      setEvolutionStep('memory', trial.accepted ? 'pass' : 'fail', trial.accepted ? '进入候选池' : '只写入审计', trial.accepted ? `进入候选池，可供后续相似样例 replay；模式 ${report.evolution.mode}。` : `仅写入审计日志，不进入候选池；模式 ${report.evolution.mode}。`);
+    } else if (validation && !validation.passed) {
+      const safetyFailure = fallbackEvolutionReason(validation.reason || validation.message || 'unsafe', false);
+      setEvolutionStep('sandbox', 'muted', '跳过试跑', `失败原因：${safetyFailure.reasonDetail}`);
+      setEvolutionStep('decision', 'fail', '拒绝并回退', safetyFailure.decisionAction);
+      setEvolutionStep('memory', 'fail', '只写入审计', `仅写入审计日志，不进入候选池；模式 ${report.evolution.mode}。`);
+    }
+    paintEvolutionPanel();
   }
   paintAttempts(report);
 }
@@ -684,15 +923,17 @@ function resetRun() {
   events = [];
   attempts = [];
   acceptedCount = 0;
+  evolutionState = initialEvolutionState();
   $('metric-events').textContent = '0';
   $('metric-accepted').textContent = '0';
   $('metric-round').textContent = '0';
-  $('rounds').innerHTML = '<div class="empty">候选表会在每轮运行后更新：展示每个策略的用途、耗时、以及是否进入 Memory。</div>';
+  $('rounds').innerHTML = '<div class="empty">候选表会在每轮运行后更新：展示每个策略的用途、耗时、以及是否更新 best-so-far。</div>';
   $('events').innerHTML = '<div class="empty">启动后这里会按时间顺序显示每个 Agent 动作。</div>';
   $('current-stage').textContent = '等待启动。';
   $('current-action').textContent = '还没有工具调用。';
   $('controller-note').textContent = '等待第一轮规划。';
   $('evolution-note').textContent = '等待生成策略变体。';
+  paintEvolutionPanel();
   document.querySelectorAll('.stage').forEach(node => node.classList.remove('active', 'done'));
 }
 async function streamRun() {
@@ -746,8 +987,8 @@ async function streamRun() {
   currentRun.addEventListener('attempt_result', (ev) => {
     const payload = JSON.parse(ev.data);
     addEvent(payload);
-    setStage('critic', `${payload.label || payload.strategy}: ${payload.accepted ? '进入 Memory' : '暂不采用'}`);
-    $('current-action').textContent = payload.accepted ? 'Critic 接受候选，Memory 将更新。' : 'Critic 保留候选作为参考，继续搜索。';
+    setStage('critic', `${payload.label || payload.strategy}: ${payload.accepted ? '更新 best-so-far' : '暂不采用'}`);
+    $('current-action').textContent = payload.accepted ? 'Critic 接受候选，best-so-far 将更新。' : 'Critic 保留候选作为参考，继续搜索。';
   });
   currentRun.addEventListener('best_update', (ev) => {
     const payload = JSON.parse(ev.data);
@@ -798,6 +1039,7 @@ $('compact').addEventListener('click', () => {
 });
 $('run-agent').addEventListener('click', streamRun);
 $('reload-cases').addEventListener('click', loadCases);
+paintEvolutionPanel();
 loadCases();
 </script>
 </body>

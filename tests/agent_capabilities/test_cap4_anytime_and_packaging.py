@@ -47,6 +47,10 @@ class AnytimeAndPackagingCapabilityTest(unittest.TestCase):
         self.assertIn("MANIFEST.txt", result.stdout)
         self.assertIn("tests/__init__.py", manifest_text)
         self.assertIn("tools/__init__.py", manifest_text)
+        self.assertIn("docs/deliverables/产品说明文档.md", manifest_text)
+        self.assertIn("docs/deliverables/项目文档.md", manifest_text)
+        self.assertIn("docs/assets/verification-evidence.svg", manifest_text)
+        self.assertNotIn("docs/research/官方视频音画对齐审核.md", manifest_text)
 
 
 if __name__ == "__main__":

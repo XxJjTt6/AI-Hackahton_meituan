@@ -8,6 +8,82 @@ from unittest import mock
 
 
 class AgentEvolutionTest(unittest.TestCase):
+    def test_blueprint_and_report_include_review_alignment_evidence(self):
+        from autosolver_agent import system
+
+        blueprint = system.get_agent_blueprint()
+
+        self.assertIn("review_alignment", blueprint)
+        alignment = blueprint["review_alignment"]
+        self.assertEqual(alignment["source"]["type"], "competition_delivery_requirements")
+        self.assertIn("solution_quality", alignment["review_dimensions"])
+        self.assertIn("autonomous_iteration", alignment["review_dimensions"])
+        self.assertIn("technical_report", alignment["review_dimensions"])
+        self.assertEqual(
+            [item["id"] for item in alignment["agent_requirements"]],
+            ["autonomous_strategy_exploration", "automatic_evaluation_filtering", "iterative_improvement_loop", "current_best_output"],
+        )
+        self.assertEqual(alignment["runtime_boundary"]["per_case_budget_s"], 10)
+
+        fake_module = mock.Mock()
+        fake_module._solution_expected_cost.return_value = 1.0
+        fake_module._fallback_official_greedy.return_value = [("T0000", ["C000"])]
+        fake_module._solve_single_task_multidispatch.return_value = [("T0000", ["C000"])]
+        fake_module._solve_disjoint_then_multidispatch.return_value = [("T0000", ["C000"])]
+        fake_module._solve_pair_potential_matching.return_value = [("T0000", ["C000"])]
+        fake_module._solve_sparse_cover.return_value = [("T0000", ["C000"])]
+        fake_module._solve_low_global_column_search.return_value = [("T0000", ["C000"])]
+        fake_module._solve_low_column_search.return_value = [("T0000", ["C000"])]
+        fake_module._solve_scarce_k2_column_search.return_value = [("T0000", ["C000"])]
+        fake_module._solve_scarce_bundle_mcf_enum.return_value = [("T0000", ["C000"])]
+        fake_module.solve.return_value = [("T0000", ["C000"])]
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(system, "EVOLUTION_ROOT", Path(tmp)), mock.patch.object(system, "load_solver", return_value=fake_module), mock.patch.object(system, "parse_candidates", return_value=([("T0000", ("T0000",), "C000", 1.0, 0.9, 0)], {"T0000"})), mock.patch.object(system, "infer_regime", return_value="large"), mock.patch.object(system, "summarize_solution", return_value={"valid": True, "covered_tasks": 1, "total_tasks": 1, "groups": 1, "used_couriers": 1, "uncovered_tasks": [], "riders_per_group": {}, "tasks_per_group": {}, "invalid_reasons": []}):
+            report = system.run_agent("task_id_list\nT0000\tC000\t1\t0.9\n", budget_s=1.0)
+
+        self.assertIn("review_alignment", report)
+        self.assertIn("alignment_evidence", report["review_alignment"])
+        evidence = report["review_alignment"]["alignment_evidence"]
+        self.assertGreaterEqual(evidence["strategy_attempts"], 1)
+        self.assertGreaterEqual(evidence["critic_decisions"], 1)
+        self.assertTrue(evidence["has_iterative_adaptation"])
+        self.assertTrue(evidence["has_self_evolution_track"])
+        self.assertEqual(evidence["runtime_budget_s"], 1.0)
+
+    def test_evolution_quality_gate_display_is_case_aware(self):
+        from autosolver_agent.system import _evolution_trial_display
+
+        low = _evolution_trial_display(
+            "quality regression",
+            False,
+            {
+                "regime": "low-willingness",
+                "tasks": 30,
+                "couriers": 60,
+                "rows": 689,
+                "avg_willingness": 0.143,
+                "has_bundles": True,
+            },
+        )
+        scarce = _evolution_trial_display(
+            "quality regression",
+            False,
+            {
+                "regime": "scarce",
+                "tasks": 30,
+                "couriers": 18,
+                "rows": 512,
+                "avg_willingness": 0.5,
+                "has_bundles": True,
+            },
+        )
+
+        self.assertNotEqual(low["reason_label"], scarce["reason_label"])
+        self.assertIn("低意愿", low["reason_label"])
+        self.assertIn("稀缺", scarce["reason_label"])
+        self.assertIn("低接受率", low["reason_detail"])
+        self.assertIn("骑手复用", scarce["reason_detail"])
+
     def test_generated_strategy_passes_safety_runs_and_updates_memory(self):
         from autosolver_agent.evolution import EvolutionManager
 
@@ -181,10 +257,10 @@ class AgentEvolutionTest(unittest.TestCase):
     def test_run_agent_emits_evolution_events_without_changing_solver_contract(self):
         from autosolver_agent import system
 
-        seen: list[str] = []
+        seen_events: list[dict] = []
 
         def observer(event):
-            seen.append(event["type"])
+            seen_events.append(event)
 
         fake_module = mock.Mock()
         fake_module._solution_expected_cost.return_value = 1.0
@@ -203,10 +279,23 @@ class AgentEvolutionTest(unittest.TestCase):
             report = system.run_agent("task_id_list\nT0000\tC000\t1\t0.9\n", budget_s=1.0, observer=observer)
 
         self.assertEqual(report["status"], "ok")
+        seen = [event["type"] for event in seen_events]
         self.assertIn("evolution_generate", seen)
         self.assertIn("evolution_validate", seen)
         self.assertIn("evolution_trial", seen)
         self.assertIn("evolution", report)
+        self.assertIn("case_profile", report["evolution"])
+        self.assertIn("generated_strategy", report["evolution"])
+        self.assertIn("trusted_details", report["evolution"])
+        self.assertIn("mode", report["evolution"])
+        trial_event = next(event for event in seen_events if event["type"] == "evolution_trial")
+        self.assertIn("reason", trial_event)
+        self.assertIn("reason_label", trial_event)
+        self.assertIn("reason_detail", trial_event)
+        self.assertIn("decision_action", trial_event)
+        self.assertIn("rollback_label", trial_event)
+        self.assertIn("elapsed_ms", trial_event)
+        self.assertIn("trial_budget_ms", trial_event)
 
     def test_rejected_generated_strategy_rolls_back_without_mutating_solver_file(self):
         from autosolver_agent import system

@@ -14,15 +14,25 @@ ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FILES = [
     Path("solver.py"),
     Path("README.md"),
-    Path("要点.md"),
-    Path("比赛复盘.md"),
-    Path("AutoSolver_Agent_最终交付方案.md"),
-    Path("runs/official_submit_20260520_132026_70222083.json"),
+    Path("docs/README.md"),
+    Path("docs/PROJECT_STRUCTURE.md"),
+    Path("docs/ARCHIVE_INDEX.md"),
+    Path("docs/deliverables/产品说明文档.md"),
+    Path("docs/deliverables/项目文档.md"),
+    Path("docs/deliverables/作品简介.md"),
+    Path("docs/assets/architecture-overview.svg"),
+    Path("docs/assets/agent-loop.svg"),
+    Path("docs/assets/verification-evidence.svg"),
+    Path("docs/assets/web-agent-home.png"),
+    Path("docs/assets/web-agent-large-run.png"),
+    Path("docs/assets/evolution-panel-large.png"),
+    Path("docs/assets/evolution-panel-tiny.png"),
+    Path("archive/runs/official_submit_20260520_132026_70222083.json"),
 ]
 OPTIONAL_FILES = [
     Path("autosolver_agent/__init__.py"),
-    Path("autosolver_agent/evolution.py"),
     Path("autosolver_agent/system.py"),
+    Path("autosolver_agent/evolution.py"),
     Path("web_agent_demo/__init__.py"),
     Path("web_agent_demo/sample_cases.py"),
     Path("web_agent_demo/server.py"),
@@ -71,14 +81,14 @@ def run_gate(cmd: list[str], timeout: int = 120) -> tuple[int, str]:
 
 def conflict_marker_gate() -> tuple[int, str]:
     bad = []
-    for rel in (Path("solver.py"), Path("AutoSolver_Agent_最终交付方案.md")):
+    for rel in (Path("solver.py"), Path("README.md"), Path("docs/PROJECT_STRUCTURE.md")):
         for lineno, line in enumerate((ROOT / rel).read_text(encoding="utf-8").splitlines(), start=1):
             if line.startswith(("<<<<<<<", "=======", ">>>>>>>")):
                 bad.append(f"{rel}:{lineno}:{line}")
     return (1 if bad else 0), "\n".join(bad)
 
 
-def run_gates(include_submit_safe: bool) -> list[tuple[str, int, str]]:
+def run_gates() -> list[tuple[str, int, str]]:
     gates: list[tuple[str, int, str]] = []
     code, output = conflict_marker_gate()
     gates.append(("conflict markers", code, output))
@@ -90,12 +100,6 @@ def run_gates(include_submit_safe: bool) -> list[tuple[str, int, str]]:
     for name, cmd, timeout in commands:
         code, output = run_gate(cmd, timeout=timeout)
         gates.append((name, code, output))
-    if include_submit_safe:
-        code, output = run_gate(
-            [sys.executable, "runs/official_submit_safe.py", "--solver", "solver.py", "--skip-submit"],
-            timeout=120,
-        )
-        gates.append(("official submit safe skip", code, output))
     return gates
 
 
@@ -144,7 +148,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build a clean local AutoSolver delivery bundle.")
     parser.add_argument("--output", default=f"submission_{dt.datetime.now():%Y%m%d_%H%M%S}")
     parser.add_argument("--skip-gates", action="store_true")
-    parser.add_argument("--include-submit-safe", action="store_true")
     parser.add_argument("--required-only", action="store_true")
     args = parser.parse_args(argv)
     output_dir = Path(args.output)
@@ -154,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
 
     gates: list[tuple[str, int, str]] = []
     if not args.skip_gates:
-        gates = run_gates(include_submit_safe=args.include_submit_safe)
+        gates = run_gates()
         failures = [name for name, code, _output in gates if code != 0]
         if failures:
             manifest = write_manifest(output_dir, [], gates)

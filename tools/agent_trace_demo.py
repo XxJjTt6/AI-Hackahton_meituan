@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT / "Fwd_ 【美团AI Hackathon大赛】-【命题四AutoSolver：让AI Agent 自主求解配送分配问题】脱敏数据"
+DATA_DIR = ROOT / "data" / "official_cases"
 
 STRATEGY_FUNCTIONS = {
     "_solve_tiny_column_search",
@@ -278,7 +278,7 @@ def trace_to_markdown(trace: dict[str, Any]) -> str:
         f"- Input: `{trace['input_path']}`",
         f"- Regime: `{trace['regime']}`",
         f"- Wall time: `{trace['wall_time_s']:.3f}s`",
-        f"- Proxy score: `{solution['proxy_score']:.2f}`",
+        f"- Local trace cost (not official): `{solution['proxy_score']:.2f}`",
         f"- Coverage: `{solution['covered_tasks']}/{solution['total_tasks']}`",
         f"- Valid: `{solution['valid']}`",
         "",

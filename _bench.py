@@ -4,7 +4,7 @@ import importlib.util, sys, time
 from pathlib import Path
 
 ROOT = Path(__file__).parent
-DATA_DIR = ROOT / "Fwd_ 【美团AI Hackathon大赛】-【命题四AutoSolver：让AI Agent 自主求解配送分配问题】脱敏数据"
+DATA_DIR = ROOT / "data" / "official_cases"
 
 
 def load_solver(path: Path):

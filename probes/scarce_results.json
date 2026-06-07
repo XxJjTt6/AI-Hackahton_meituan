@@ -1,8 +1,0 @@
-{
-  "non_scarce_total": 5533.56,
-  "G": {"platform_avg_score": null, "strategy": "K=1 singles, reject 2 worst"},
-  "H": {"platform_avg_score": null, "strategy": "1 bundle + singles, 1 reject"},
-  "I": {"platform_avg_score": null, "strategy": "2 bundles + singles, 100% cover"},
-  "J": {"platform_avg_score": null, "strategy": "3 bundles + singles, 100% cover"},
-  "K": {"platform_avg_score": null, "strategy": "K=2 multi-dispatch, reject 2"}
-}
